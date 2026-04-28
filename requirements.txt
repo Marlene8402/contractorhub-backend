@@ -1,0 +1,12 @@
+Django==4.2.7
+djangorestframework==3.14.0
+django-cors-headers==4.3.0
+python-decouple==3.8
+psycopg2-binary==2.9.9
+requests==2.31.0
+python-dateutil==2.8.2
+PyJWT==2.12.1
+cryptography==41.0.7
+gunicorn==21.2.0
+whitenoise==6.6.0
+dj-database-url==3.0.1

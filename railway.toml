@@ -1,0 +1,10 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "gunicorn contractor_hub.wsgi --bind 0.0.0.0:$PORT"
+healthcheckPath = "/admin/"
+healthcheckTimeout = 30
+
+[[deploy.releaseCommands]]
+command = "python manage.py migrate --no-input"
