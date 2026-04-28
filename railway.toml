@@ -4,7 +4,7 @@ buildCommand = "pip install -r requirements.txt && python manage.py collectstati
 
 [deploy]
 startCommand = "gunicorn contractor_hub.wsgi --bind 0.0.0.0:$PORT"
-healthcheckPath = "/api/auth/token/"
+healthcheckPath = "/health/"
 healthcheckTimeout = 30
 
 [[deploy.releaseCommands]]
