@@ -1,0 +1,55 @@
+name: Test & Deploy Backend
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Django checks
+        env:
+          SECRET_KEY: ci-test-secret-key
+          DEBUG: 'True'
+          DB_HOST: localhost
+        run: python manage.py check
+
+      - name: Run tests
+        env:
+          SECRET_KEY: ci-test-secret-key
+          DEBUG: 'True'
+          DB_HOST: localhost
+        run: python manage.py test --verbosity=2
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trigger Railway deployment
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"mutation { serviceInstanceRedeploy(serviceId: \"2413c3e2-a529-44bd-bc4e-1918d09694e1\", environmentId: \"384c0c8c-5eee-47c7-8a3e-5d6944d417b5\") }"}'
+          echo "Deployment triggered on Railway"
