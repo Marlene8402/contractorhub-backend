@@ -1,9 +1,10 @@
 [build]
 builder = "nixpacks"
+buildCommand = "pip install -r requirements.txt && python manage.py collectstatic --no-input"
 
 [deploy]
 startCommand = "gunicorn contractor_hub.wsgi --bind 0.0.0.0:$PORT"
-healthcheckPath = "/admin/"
+healthcheckPath = "/api/auth/token/"
 healthcheckTimeout = 30
 
 [[deploy.releaseCommands]]
