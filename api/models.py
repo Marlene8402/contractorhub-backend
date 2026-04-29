@@ -169,38 +169,70 @@ class Invoice(models.Model):
         ordering = ['-issue_date']
 
 
-class QBSyncLog(models.Model):
-    """Track QB sync operations"""
-    SYNC_TYPES = [
-        ('project', 'Project'),
-        ('invoice', 'Invoice'),
-        ('customer', 'Customer'),
-        ('expense', 'Expense'),
-    ]
-    
-    STATUS_CHOICES = [
-        ('pending', 'Pending'),
-        ('success', 'Success'),
-        ('failed', 'Failed'),
-    ]
-    
-    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='qb_sync_logs')
-    sync_type = models.CharField(max_length=20, choices=SYNC_TYPES)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
-    
-    direction = models.CharField(max_length=20, choices=[('push', 'Push'), ('pull', 'Pull')])
-    qb_id = models.CharField(max_length=100, blank=True)
-    
-    response_data = models.JSONField(blank=True, null=True)
-    error_message = models.TextField(blank=True)
-    
-    synced_at = models.DateTimeField(auto_now_add=True)
+class QBAccount(models.Model):
+    """One QB OAuth connection per Django user."""
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='qb_account')
+    access_token = models.TextField()
+    refresh_token = models.TextField()
+    token_expires_at = models.DateTimeField()
+    realm_id = models.CharField(max_length=20)
+    is_connected = models.BooleanField(default=True)
+    connected_at = models.DateTimeField(auto_now_add=True)
+    last_refreshed_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
-        return f"{self.sync_type} {self.status} at {self.synced_at}"
+        return f"{self.user.username} - QB Account"
+
+
+class QBGLMapping(models.Model):
+    """Maps a CSI cost code (or category) to a QB GL account."""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='qb_gl_mappings')
+    category = models.CharField(max_length=50)
+    gl_account_number = models.CharField(max_length=20)
+    gl_account_name = models.CharField(max_length=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['-synced_at']
+        unique_together = ('user', 'category')
+        ordering = ['category']
+
+    def __str__(self):
+        return f"{self.user.username} · {self.category} → {self.gl_account_number}"
+
+
+class QBSyncLog(models.Model):
+    """Audit log of every QB sync attempt with full retry / error tracking."""
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('syncing', 'Syncing'),
+        ('success', 'Success'),
+        ('failed',  'Failed'),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='qb_sync_logs')
+    sync_type = models.CharField(max_length=20)
+    object_id = models.CharField(max_length=50)
+    object_type = models.CharField(max_length=20)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    attempt_count = models.IntegerField(default=0)
+    qb_transaction_id = models.CharField(max_length=100, null=True, blank=True)
+    idempotency_key = models.CharField(max_length=100, unique=True)
+    error_message = models.TextField(null=True, blank=True)
+    error_code = models.CharField(max_length=50, null=True, blank=True)
+    last_attempted_at = models.DateTimeField(null=True, blank=True)
+    synced_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'status']),
+            models.Index(fields=['idempotency_key']),
+        ]
+
+    def __str__(self):
+        return f"{self.object_type} {self.object_id} · {self.status}"
 
 
 class ProjectSchedule(models.Model):

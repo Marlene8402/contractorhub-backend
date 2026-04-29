@@ -1,7 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework.authtoken.views import obtain_auth_token
-from . import views
+from . import views, qb_views
 
 router = DefaultRouter()
 router.register(r'companies', views.CompanyViewSet, basename='company')
@@ -10,10 +10,22 @@ router.register(r'team-members', views.TeamMemberViewSet, basename='team-member'
 router.register(r'budgets', views.BudgetViewSet, basename='budget')
 router.register(r'invoices', views.InvoiceViewSet, basename='invoice')
 router.register(r'project-schedules', views.ProjectScheduleViewSet, basename='project-schedule')
-router.register(r'qb-sync-logs', views.QBSyncLogViewSet, basename='qb-sync-log')
 
 urlpatterns = [
     path('', include(router.urls)),
     path('auth/token/', obtain_auth_token, name='api-token-auth'),
-    path('qb/callback/', views.qb_callback, name='qb-callback'),
+
+    # QuickBooks OAuth
+    path('auth/quickbooks/',          qb_views.quickbooks_auth,       name='qb_auth'),
+    path('auth/quickbooks/callback/', qb_views.quickbooks_callback,   name='qb_callback'),
+    path('qb/disconnect/',            qb_views.quickbooks_disconnect, name='qb_disconnect'),
+
+    # QuickBooks sync
+    path('qb/sync-status/',           qb_views.qb_sync_status,        name='qb_sync_status'),
+    path('qb/sync-invoice/',          qb_views.qb_sync_invoice,       name='qb_sync_invoice'),
+
+    # GL mappings
+    path('qb/gl-mappings/',           qb_views.qb_gl_mappings,        name='qb_gl_mappings'),
+    path('qb/gl-mappings/<int:mapping_id>/',
+                                       qb_views.qb_gl_mapping_detail,  name='qb_gl_mapping_detail'),
 ]

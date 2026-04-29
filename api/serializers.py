@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Company, TeamMember, Project, Budget, Invoice, ProjectSchedule, QBSyncLog
+from .models import Company, TeamMember, Project, Budget, Invoice, ProjectSchedule
 
 class CompanySerializer(serializers.ModelSerializer):
     class Meta:
@@ -72,8 +72,3 @@ class ProjectListSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class QBSyncLogSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = QBSyncLog
-        fields = ['id', 'sync_type', 'status', 'direction', 'qb_id', 'error_message', 'synced_at']
-        read_only_fields = fields

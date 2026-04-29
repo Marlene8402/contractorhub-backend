@@ -125,7 +125,7 @@ CORS_ALLOWED_ORIGINS = [
 # QB OAuth Settings
 QB_CLIENT_ID = config('QB_CLIENT_ID', default='')
 QB_CLIENT_SECRET = config('QB_CLIENT_SECRET', default='')
-QB_REDIRECT_URI = config('QB_REDIRECT_URI', default='http://localhost:8000/api/qb/callback/')
+QB_REDIRECT_URI = config('QB_REDIRECT_URI', default='https://contractorhub-backend-production.up.railway.app/api/auth/quickbooks/callback/')
 QB_REALM_ID = config('QB_REALM_ID', default='')
 
 # Email (for future use)
