@@ -256,3 +256,138 @@ class PaymentApplicationSerializer(serializers.ModelSerializer):
             'total_retainage', 'total_earned_less_retainage',
             'created_at', 'updated_at',
         ]
+
+
+# ---------- A1.6 serializers: Tasks + Schedule + Phases + Budget lines ----------
+
+from .models import (
+    ProjectPhase, ScheduleItem, ProjectTask, Subtask, TaskComment,
+    TaskHandoff, TaskWatcher, TaskTemplate, BudgetLineItem, BudgetAllocation,
+)
+
+
+class ProjectPhaseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProjectPhase
+        fields = [
+            'id', 'project', 'name', 'sort_order', 'color_hex',
+            'started_at', 'finished_at', 'is_active',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['created_at', 'updated_at']
+
+
+class ScheduleItemSerializer(serializers.ModelSerializer):
+    depends_on = serializers.PrimaryKeyRelatedField(
+        many=True, queryset=ScheduleItem.objects.all(), required=False,
+    )
+
+    class Meta:
+        model = ScheduleItem
+        fields = [
+            'id', 'project',
+            'kind', 'title', 'details',
+            'start_date', 'end_date', 'percent_complete', 'depends_on',
+            'phase',
+            'assigned_to', 'assigned_to_name', 'trade', 'location',
+            'spec_section', 'submitted_date', 'required_by_date',
+            'approved_date', 'approval_status',
+            'rfi_number', 'question', 'answer', 'responded_date',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['created_at', 'updated_at']
+
+
+class SubtaskSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Subtask
+        fields = [
+            'id', 'task', 'title', 'is_done', 'completed_at',
+            'due_date', 'sort_order', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['created_at', 'updated_at']
+
+
+class TaskCommentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TaskComment
+        fields = ['id', 'task', 'author', 'author_name', 'text', 'timestamp']
+        read_only_fields = ['timestamp']
+
+
+class TaskHandoffSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TaskHandoff
+        fields = [
+            'id', 'task',
+            'from_member', 'from_name', 'to_member', 'to_name',
+            'note', 'timestamp',
+        ]
+        read_only_fields = ['timestamp']
+
+
+class TaskWatcherSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TaskWatcher
+        fields = ['id', 'task', 'team_member', 'created_at']
+        read_only_fields = ['created_at']
+
+
+class ProjectTaskSerializer(serializers.ModelSerializer):
+    """Embeds subtasks/comments/handoffs/watchers as nested read-only collections
+    to match the Mac client's existing UserDefaults shape (Subtask[], Comment[],
+    Handoff[], watcherIDs[]). Writes go through the dedicated child endpoints."""
+    subtasks    = SubtaskSerializer(many=True, read_only=True)
+    comments    = TaskCommentSerializer(many=True, read_only=True)
+    handoffs    = TaskHandoffSerializer(many=True, read_only=True)
+    watcher_ids = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProjectTask
+        fields = [
+            'id', 'project',
+            'title', 'details', 'category', 'priority', 'status',
+            'assigned_to', 'assigned_to_name',
+            'due_date', 'location', 'completed_at',
+            'recurrence', 'reminder_days_before', 'last_reminder_sent',
+            'phase', 'photo_filenames',
+            'subtasks', 'comments', 'handoffs', 'watcher_ids',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['created_at', 'updated_at']
+
+    def get_watcher_ids(self, obj):
+        return list(obj.watchers.values_list('team_member_id', flat=True))
+
+
+class TaskTemplateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TaskTemplate
+        fields = [
+            'id', 'company',
+            'name', 'title', 'details', 'category', 'priority', 'location',
+            'subtask_titles', 'recurrence', 'reminder_days_before',
+            'default_assignee', 'default_assignee_name', 'default_phase_name',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['company', 'created_at', 'updated_at']
+
+
+class BudgetLineItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BudgetLineItem
+        fields = [
+            'id', 'project', 'csi_code', 'csi_title', 'description',
+            'budgeted_amount', 'sort_order', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['created_at', 'updated_at']
+
+
+class BudgetAllocationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BudgetAllocation
+        fields = [
+            'id', 'invoice', 'line_item', 'csi_code',
+            'amount', 'allocation_date', 'qb_pushed', 'created_at',
+        ]
+        read_only_fields = ['created_at']

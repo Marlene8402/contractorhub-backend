@@ -415,3 +415,159 @@ class PayAppLineViewSet(_CompanyScopedViewSet):
         if pay_app_id:
             qs = qs.filter(pay_app_id=pay_app_id)
         return qs
+
+
+# ============================================================================
+# A1.6 viewsets: Tasks + Schedule + Phases + Budget lines + Allocations
+# All scoped via _CompanyScopedViewSet — Project FK chain enforces tenancy.
+# ============================================================================
+
+from .models import (
+    ProjectPhase, ScheduleItem, ProjectTask, Subtask, TaskComment,
+    TaskHandoff, TaskWatcher, TaskTemplate, BudgetLineItem, BudgetAllocation,
+)
+from .serializers import (
+    ProjectPhaseSerializer, ScheduleItemSerializer, ProjectTaskSerializer,
+    SubtaskSerializer, TaskCommentSerializer, TaskHandoffSerializer,
+    TaskWatcherSerializer, TaskTemplateSerializer,
+    BudgetLineItemSerializer, BudgetAllocationSerializer,
+)
+
+
+class ProjectPhaseViewSet(_CompanyScopedViewSet):
+    """Per-project phases. Filter: ?project=<id>"""
+    model = ProjectPhase
+    serializer_class = ProjectPhaseSerializer
+    project_lookup = 'project'
+
+
+class ScheduleItemViewSet(_CompanyScopedViewSet):
+    """Unified schedule entries (tasks/milestones/look-ahead/submittals/RFIs).
+    Filters: ?project=<id>  ?kind=task|milestone|look_ahead|submittal|rfi
+             ?approval_status=open|submitted|...   ?phase=<uuid>"""
+    model = ScheduleItem
+    serializer_class = ScheduleItemSerializer
+    project_lookup = 'project'
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        for param in ('kind', 'approval_status', 'phase', 'trade'):
+            val = self.request.query_params.get(param)
+            if val:
+                qs = qs.filter(**{param: val})
+        return qs
+
+
+class ProjectTaskViewSet(_CompanyScopedViewSet):
+    """Hand-off-aware project tasks. Filter: ?project=<id>  ?status=open|...
+    ?assigned_to=<team_member_id>  ?phase=<uuid>  ?category=punch|..."""
+    model = ProjectTask
+    serializer_class = ProjectTaskSerializer
+    project_lookup = 'project'
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        for param in ('status', 'assigned_to', 'phase', 'category', 'priority'):
+            val = self.request.query_params.get(param)
+            if val:
+                qs = qs.filter(**{param: val})
+        return qs
+
+
+class SubtaskViewSet(_CompanyScopedViewSet):
+    """Subtasks under a ProjectTask. Filter: ?task=<uuid>"""
+    model = Subtask
+    serializer_class = SubtaskSerializer
+    project_lookup = 'task__project'
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        task_id = self.request.query_params.get('task')
+        if task_id:
+            qs = qs.filter(task_id=task_id)
+        return qs
+
+
+class TaskCommentViewSet(_CompanyScopedViewSet):
+    """Comments on tasks. Filter: ?task=<uuid>"""
+    model = TaskComment
+    serializer_class = TaskCommentSerializer
+    project_lookup = 'task__project'
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        task_id = self.request.query_params.get('task')
+        if task_id:
+            qs = qs.filter(task_id=task_id)
+        return qs
+
+
+class TaskHandoffViewSet(_CompanyScopedViewSet):
+    """Handoff audit trail. Filter: ?task=<uuid>"""
+    model = TaskHandoff
+    serializer_class = TaskHandoffSerializer
+    project_lookup = 'task__project'
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        task_id = self.request.query_params.get('task')
+        if task_id:
+            qs = qs.filter(task_id=task_id)
+        return qs
+
+
+class TaskWatcherViewSet(_CompanyScopedViewSet):
+    """Task watchers join table. Filter: ?task=<uuid>  ?team_member=<id>"""
+    model = TaskWatcher
+    serializer_class = TaskWatcherSerializer
+    project_lookup = 'task__project'
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        task_id = self.request.query_params.get('task')
+        if task_id:
+            qs = qs.filter(task_id=task_id)
+        member_id = self.request.query_params.get('team_member')
+        if member_id:
+            qs = qs.filter(team_member_id=member_id)
+        return qs
+
+
+class TaskTemplateViewSet(viewsets.ModelViewSet):
+    """Reusable task templates, scoped per Company (not per project)."""
+    serializer_class = TaskTemplateSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        company = _user_company(self.request.user)
+        if not company:
+            return TaskTemplate.objects.none()
+        return TaskTemplate.objects.filter(company=company)
+
+    def perform_create(self, serializer):
+        company = _user_company(self.request.user)
+        serializer.save(company=company)
+
+
+class BudgetLineItemViewSet(_CompanyScopedViewSet):
+    """CSI-coded budget line items. Filter: ?project=<id>"""
+    model = BudgetLineItem
+    serializer_class = BudgetLineItemSerializer
+    project_lookup = 'project'
+
+
+class BudgetAllocationViewSet(_CompanyScopedViewSet):
+    """Invoice-to-budget-line-item allocations. Filter: ?invoice=<id>  ?line_item=<uuid>"""
+    model = BudgetAllocation
+    serializer_class = BudgetAllocationSerializer
+    project_lookup = 'invoice__project'
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        inv_id = self.request.query_params.get('invoice')
+        if inv_id:
+            qs = qs.filter(invoice_id=inv_id)
+        line_id = self.request.query_params.get('line_item')
+        if line_id:
+            qs = qs.filter(line_item_id=line_id)
+        return qs
