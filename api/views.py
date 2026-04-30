@@ -6,12 +6,16 @@ from .models import (
     Company, TeamMember, Project, Budget, Invoice, ProjectSchedule,
     Subcontract, SubcontractLineItem, SubLineAllocation,
     InsuranceCertificate, DailyLog, LienWaiver,
+    PrimeChangeOrder, SubcontractChangeOrder, OwnerContract,
+    PaymentApplication, PayAppLine,
 )
 from .serializers import (
     CompanySerializer, TeamMemberSerializer, ProjectSerializer, ProjectListSerializer,
     BudgetSerializer, InvoiceSerializer, ProjectScheduleSerializer,
     SubcontractSerializer, SubcontractLineItemSerializer, SubLineAllocationSerializer,
     InsuranceCertificateSerializer, DailyLogSerializer, LienWaiverSerializer,
+    PrimeChangeOrderSerializer, SubcontractChangeOrderSerializer, OwnerContractSerializer,
+    PaymentApplicationSerializer, PayAppLineSerializer,
 )
 
 
@@ -320,3 +324,94 @@ class LienWaiverViewSet(_CompanyScopedViewSet):
         return qs
 
 
+
+
+# ============================================================================
+# A1.5: Change Orders + Pay Applications viewsets
+# ============================================================================
+
+
+class PrimeChangeOrderViewSet(_CompanyScopedViewSet):
+    """Owner change orders, scoped to user's projects.
+    Filters: ?project=<id>  ?status=pending|approved|rejected"""
+    model = PrimeChangeOrder
+    serializer_class = PrimeChangeOrderSerializer
+    project_lookup = 'project'
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        return qs
+
+    @action(detail=False, methods=['get'])
+    def approved_total(self, request):
+        """Sum of approved prime CO amounts. Use for "effective contract = original + this".
+        Required filter: ?project=<id>"""
+        project_id = request.query_params.get('project')
+        if not project_id:
+            return Response({'error': 'project query param required'}, status=400)
+        company = _user_company(request.user)
+        if not company:
+            return Response({'approved_total': 0})
+        from django.db.models import Sum
+        total = (PrimeChangeOrder.objects
+                 .filter(project__company=company, project_id=project_id, status='approved')
+                 .aggregate(t=Sum('approved_amount'))['t'] or 0)
+        return Response({'approved_total': total})
+
+
+class SubcontractChangeOrderViewSet(_CompanyScopedViewSet):
+    """Subcontract change orders, scoped to user's projects.
+    Filters: ?subcontract=<uuid>  ?status=pending|approved|rejected"""
+    model = SubcontractChangeOrder
+    serializer_class = SubcontractChangeOrderSerializer
+    project_lookup = 'subcontract__project'
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        sub_id = self.request.query_params.get('subcontract')
+        if sub_id:
+            qs = qs.filter(subcontract_id=sub_id)
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        return qs
+
+
+class OwnerContractViewSet(_CompanyScopedViewSet):
+    """Owner contract metadata, one per project. PK is project_id (OneToOne)."""
+    model = OwnerContract
+    serializer_class = OwnerContractSerializer
+    project_lookup = 'project'
+
+
+class PaymentApplicationViewSet(_CompanyScopedViewSet):
+    """AIA G702/G703 pay applications, scoped to user's projects.
+    Filters: ?project=<id>  ?status=draft|submitted|approved|paid"""
+    model = PaymentApplication
+    serializer_class = PaymentApplicationSerializer
+    project_lookup = 'project'
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        return qs
+
+
+class PayAppLineViewSet(_CompanyScopedViewSet):
+    """G703 SOV line items.
+    Filter by pay app: ?pay_app=<uuid>"""
+    model = PayAppLine
+    serializer_class = PayAppLineSerializer
+    project_lookup = 'pay_app__project'
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        pay_app_id = self.request.query_params.get('pay_app')
+        if pay_app_id:
+            qs = qs.filter(pay_app_id=pay_app_id)
+        return qs
