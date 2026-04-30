@@ -3,6 +3,8 @@ from .models import (
     Company, TeamMember, Project, Budget, Invoice, ProjectSchedule,
     Subcontract, SubcontractLineItem, SubLineAllocation,
     InsuranceCertificate, DailyLog, LienWaiver,
+    PrimeChangeOrder, SubcontractChangeOrder, OwnerContract,
+    PaymentApplication, PayAppLine,
 )
 
 class CompanySerializer(serializers.ModelSerializer):
@@ -162,3 +164,95 @@ class LienWaiverSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at',
         ]
         read_only_fields = ['created_at', 'updated_at']
+
+
+# ---------- A1.5 serializers: Change Orders + Pay Applications ----------
+
+
+class PrimeChangeOrderSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PrimeChangeOrder
+        fields = [
+            'id', 'project',
+            'number', 'title', 'description', 'justification',
+            'requested_amount', 'requested_date',
+            'status',
+            'approved_amount', 'approved_date', 'approved_by', 'rejected_reason',
+            'photo_filenames',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['created_at', 'updated_at']
+
+
+class SubcontractChangeOrderSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SubcontractChangeOrder
+        fields = [
+            'id', 'subcontract',
+            'number', 'title', 'description', 'justification',
+            'requested_amount', 'requested_date',
+            'status',
+            'approved_amount', 'approved_date', 'approved_by', 'rejected_reason',
+            'photo_filenames',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['created_at', 'updated_at']
+
+
+class OwnerContractSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OwnerContract
+        fields = [
+            'project',
+            'contract_number', 'contract_type', 'signed_date',
+            'owner_name', 'owner_rep_name', 'owner_rep_email', 'owner_rep_phone',
+            'notes', 'attachment_filenames',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['created_at', 'updated_at']
+
+
+class PayAppLineSerializer(serializers.ModelSerializer):
+    total_completed_and_stored = serializers.ReadOnlyField()
+    percent_complete = serializers.ReadOnlyField()
+    balance_to_finish = serializers.ReadOnlyField()
+
+    class Meta:
+        model = PayAppLine
+        fields = [
+            'id', 'pay_app',
+            'item_number', 'csi_code', 'description',
+            'scheduled_value',
+            'work_completed_from_previous', 'work_completed_this_period', 'materials_stored',
+            'retainage_percent_override',
+            'sort_order',
+            'total_completed_and_stored', 'percent_complete', 'balance_to_finish',
+        ]
+        read_only_fields = ['total_completed_and_stored', 'percent_complete', 'balance_to_finish']
+
+
+class PaymentApplicationSerializer(serializers.ModelSerializer):
+    lines = PayAppLineSerializer(many=True, read_only=True)
+    contract_sum_to_date = serializers.ReadOnlyField()
+    total_completed_and_stored_to_date = serializers.ReadOnlyField()
+    total_retainage = serializers.ReadOnlyField()
+    total_earned_less_retainage = serializers.ReadOnlyField()
+
+    class Meta:
+        model = PaymentApplication
+        fields = [
+            'id', 'project',
+            'application_number', 'application_date', 'period_from', 'period_to',
+            'status', 'retainage_percent',
+            'original_contract_sum', 'net_change_orders_at_submission',
+            'notes',
+            'contract_sum_to_date', 'total_completed_and_stored_to_date',
+            'total_retainage', 'total_earned_less_retainage',
+            'lines',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = [
+            'contract_sum_to_date', 'total_completed_and_stored_to_date',
+            'total_retainage', 'total_earned_less_retainage',
+            'created_at', 'updated_at',
+        ]

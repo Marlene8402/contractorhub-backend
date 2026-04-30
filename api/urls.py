@@ -19,6 +19,13 @@ router.register(r'insurance-certificates', views.InsuranceCertificateViewSet, ba
 router.register(r'daily-logs', views.DailyLogViewSet, basename='daily-log')
 router.register(r'lien-waivers', views.LienWaiverViewSet, basename='lien-waiver')
 
+# A1.5: Change Orders + Pay Applications
+router.register(r'prime-change-orders', views.PrimeChangeOrderViewSet, basename='prime-change-order')
+router.register(r'sub-change-orders', views.SubcontractChangeOrderViewSet, basename='sub-change-order')
+router.register(r'owner-contracts', views.OwnerContractViewSet, basename='owner-contract')
+router.register(r'payment-applications', views.PaymentApplicationViewSet, basename='payment-application')
+router.register(r'pay-app-lines', views.PayAppLineViewSet, basename='pay-app-line')
+
 urlpatterns = [
     path('', include(router.urls)),
     path('auth/token/', obtain_auth_token, name='api-token-auth'),

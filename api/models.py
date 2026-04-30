@@ -502,3 +502,238 @@ class LienWaiver(models.Model):
 
     def __str__(self):
         return f"{self.get_waiver_type_display()} · {self.claimant_name} · {self.through_date}"
+
+
+# ============================================================================
+# Multi-tenant foundation A1.5 — Change Orders + Pay Applications.
+# Same patterns as A1: UUID PKs, company scoping via Project.
+# ============================================================================
+
+
+class PrimeChangeOrder(models.Model):
+    """Change order between us and the OWNER. When approved, raises (or lowers)
+    the project's effective contract value. We never edit Project.contract_amount —
+    the running total is computed as `original + sum(approved primes)`."""
+    STATUS_CHOICES = [
+        ('pending',  'Pending Approval'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='prime_change_orders')
+
+    number = models.CharField(max_length=50, blank=True, help_text='"PCO-001", "CO-12", whatever the GC uses')
+    title = models.CharField(max_length=255, blank=True)
+    description = models.TextField(blank=True)
+    justification = models.TextField(blank=True, help_text='Why the change is needed')
+
+    requested_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0,
+                                           help_text='Can be negative for credits')
+    requested_date = models.DateField(blank=True, null=True)
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+
+    approved_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0,
+                                          help_text='May differ from requested')
+    approved_date = models.DateField(blank=True, null=True)
+    approved_by = models.CharField(max_length=255, blank=True, help_text='Owner rep / signer name')
+    rejected_reason = models.TextField(blank=True)
+
+    photo_filenames = models.JSONField(default=list, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['project', 'status']),
+        ]
+
+    def __str__(self):
+        return f"PCO {self.number} · {self.title or '(untitled)'} · {self.status}"
+
+
+class SubcontractChangeOrder(models.Model):
+    """Change order between us and a SUBCONTRACTOR. When approved, raises (or
+    lowers) that subcontract's effective value."""
+    STATUS_CHOICES = PrimeChangeOrder.STATUS_CHOICES
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    subcontract = models.ForeignKey(Subcontract, on_delete=models.CASCADE,
+                                     related_name='change_orders')
+
+    number = models.CharField(max_length=50, blank=True)
+    title = models.CharField(max_length=255, blank=True)
+    description = models.TextField(blank=True)
+    justification = models.TextField(blank=True)
+
+    requested_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    requested_date = models.DateField(blank=True, null=True)
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+
+    approved_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    approved_date = models.DateField(blank=True, null=True)
+    approved_by = models.CharField(max_length=255, blank=True)
+    rejected_reason = models.TextField(blank=True)
+
+    photo_filenames = models.JSONField(default=list, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['subcontract', 'status']),
+        ]
+
+    def __str__(self):
+        return f"SubCO {self.number} · {self.title or '(untitled)'} · {self.status}"
+
+
+class OwnerContract(models.Model):
+    """Contract metadata that doesn't fit on Project (signing date, contract type,
+    owner rep contact, free-text notes). One per project."""
+    CONTRACT_TYPE_CHOICES = [
+        ('lump_sum',     'Lump Sum / Fixed Price'),
+        ('cost_plus',    'Cost Plus'),
+        ('gmp',          'Guaranteed Maximum Price (GMP)'),
+        ('time_and_mat', 'Time & Materials'),
+        ('unit_price',   'Unit Price'),
+        ('other',        'Other'),
+    ]
+
+    project = models.OneToOneField(Project, on_delete=models.CASCADE,
+                                    related_name='owner_contract', primary_key=True)
+
+    contract_number = models.CharField(max_length=100, blank=True)
+    contract_type = models.CharField(max_length=20, choices=CONTRACT_TYPE_CHOICES, blank=True)
+    signed_date = models.DateField(blank=True, null=True)
+
+    owner_name = models.CharField(max_length=255, blank=True, help_text='Owner / client legal name')
+    owner_rep_name = models.CharField(max_length=255, blank=True)
+    owner_rep_email = models.EmailField(blank=True)
+    owner_rep_phone = models.CharField(max_length=30, blank=True)
+
+    notes = models.TextField(blank=True)
+    attachment_filenames = models.JSONField(default=list, blank=True,
+                                             help_text='Signed PDF, exhibits, etc.')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Owner contract for {self.project.name}"
+
+
+class PaymentApplication(models.Model):
+    """AIA G702/G703 progress billing. One per (project, period). Lines stored
+    in PayAppLine. G702 totals are computed properties on the Python side."""
+    STATUS_CHOICES = [
+        ('draft',     'Draft'),
+        ('submitted', 'Submitted'),
+        ('approved',  'Approved'),
+        ('paid',      'Paid'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(Project, on_delete=models.CASCADE,
+                                 related_name='payment_applications')
+
+    application_number = models.IntegerField(help_text='1, 2, 3, ... per project')
+    application_date = models.DateField(blank=True, null=True)
+    period_from = models.DateField(blank=True, null=True)
+    period_to = models.DateField(blank=True, null=True)
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+
+    retainage_percent = models.DecimalField(max_digits=5, decimal_places=2, default=10,
+                                            help_text='App-level default; lines can override')
+
+    # Snapshotted contract values so historic apps don't shift if the project's
+    # contract or COs change later.
+    original_contract_sum = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    net_change_orders_at_submission = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
+    notes = models.TextField(blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-application_number']
+        indexes = [
+            models.Index(fields=['project', '-application_number']),
+        ]
+        unique_together = ('project', 'application_number')
+
+    def __str__(self):
+        return f"Pay App #{self.application_number} · {self.project.name}"
+
+    @property
+    def contract_sum_to_date(self):
+        return self.original_contract_sum + self.net_change_orders_at_submission
+
+    @property
+    def total_completed_and_stored_to_date(self):
+        return sum((li.total_completed_and_stored for li in self.lines.all()), 0)
+
+    @property
+    def total_retainage(self):
+        rate = self.retainage_percent
+        return sum((li.retainage_amount(rate) for li in self.lines.all()), 0)
+
+    @property
+    def total_earned_less_retainage(self):
+        return self.total_completed_and_stored_to_date - self.total_retainage
+
+
+class PayAppLine(models.Model):
+    """G703 Schedule of Values row. Belongs to a PaymentApplication."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    pay_app = models.ForeignKey(PaymentApplication, on_delete=models.CASCADE, related_name='lines')
+
+    item_number = models.CharField(max_length=20, blank=True, help_text='"1", "2.1", "CO-3", etc.')
+    csi_code = models.CharField(max_length=20, blank=True)
+    description = models.CharField(max_length=500, blank=True)
+
+    scheduled_value = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    work_completed_from_previous = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    work_completed_this_period = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    materials_stored = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
+    retainage_percent_override = models.DecimalField(
+        max_digits=5, decimal_places=2, default=0,
+        help_text='Per-line retainage override. Use 0 to inherit the app-level rate.',
+    )
+
+    sort_order = models.IntegerField(default=0)
+
+    class Meta:
+        ordering = ['sort_order', 'item_number']
+
+    def __str__(self):
+        return f"{self.item_number} · {self.description}"[:80]
+
+    @property
+    def total_completed_and_stored(self):
+        return (self.work_completed_from_previous
+                + self.work_completed_this_period
+                + self.materials_stored)
+
+    @property
+    def percent_complete(self):
+        if self.scheduled_value <= 0:
+            return 0
+        return float(self.total_completed_and_stored) / float(self.scheduled_value) * 100
+
+    @property
+    def balance_to_finish(self):
+        return self.scheduled_value - self.total_completed_and_stored
+
+    def retainage_amount(self, app_rate):
+        rate = self.retainage_percent_override if self.retainage_percent_override > 0 else app_rate
+        return self.total_completed_and_stored * rate / 100
