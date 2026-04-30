@@ -59,7 +59,7 @@ def quickbooks_callback(request):
         return JsonResponse({'error': 'Invalid state'}, status=400)
 
     r = requests.post(
-        'https://oauth.platform.intuit.com/oauth2/tokens/Bearer',
+        'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer',
         data={
             'grant_type': 'authorization_code',
             'code': code,

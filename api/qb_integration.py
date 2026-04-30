@@ -47,7 +47,7 @@ def refresh_qb_token(user):
 
     if time_until_expiry.total_seconds() < 300:  # < 5 min
         r = requests.post(
-            'https://oauth.platform.intuit.com/oauth2/tokens/Bearer',
+            'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer',
             data={
                 'grant_type': 'refresh_token',
                 'refresh_token': qb_account.refresh_token,
