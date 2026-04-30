@@ -1,5 +1,9 @@
 from rest_framework import serializers
-from .models import Company, TeamMember, Project, Budget, Invoice, ProjectSchedule
+from .models import (
+    Company, TeamMember, Project, Budget, Invoice, ProjectSchedule,
+    Subcontract, SubcontractLineItem, SubLineAllocation,
+    InsuranceCertificate, DailyLog, LienWaiver,
+)
 
 class CompanySerializer(serializers.ModelSerializer):
     class Meta:
@@ -72,3 +76,89 @@ class ProjectListSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+# ---------- A1: multi-tenant foundation serializers ----------
+
+class SubcontractLineItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SubcontractLineItem
+        fields = [
+            'id', 'subcontract', 'description', 'csi_code', 'csi_title',
+            'amount', 'notes', 'sort_order', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['created_at', 'updated_at']
+
+
+class SubcontractSerializer(serializers.ModelSerializer):
+    line_items = SubcontractLineItemSerializer(many=True, read_only=True)
+    contract_amount = serializers.ReadOnlyField()
+
+    class Meta:
+        model = Subcontract
+        fields = [
+            'id', 'project', 'name',
+            'vendor_name', 'vendor_email', 'vendor_phone',
+            'scope', 'status', 'start_date', 'end_date',
+            'contract_amount', 'line_items',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['contract_amount', 'created_at', 'updated_at']
+
+
+class SubLineAllocationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SubLineAllocation
+        fields = [
+            'id', 'invoice', 'subcontract', 'line_item',
+            'amount', 'allocation_date', 'created_at',
+        ]
+        read_only_fields = ['created_at']
+
+
+class InsuranceCertificateSerializer(serializers.ModelSerializer):
+    days_until_expiration = serializers.ReadOnlyField()
+    status = serializers.ReadOnlyField()
+
+    class Meta:
+        model = InsuranceCertificate
+        fields = [
+            'id', 'subcontract', 'coverage_type',
+            'carrier', 'policy_number',
+            'effective_date', 'expiration_date',
+            'coverage_limit', 'aggregate_limit',
+            'additional_insured', 'waiver_of_subrogation', 'primary_and_non_contributory',
+            'notes', 'last_reminder_sent',
+            'days_until_expiration', 'status',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['days_until_expiration', 'status', 'created_at', 'updated_at']
+
+
+class DailyLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DailyLog
+        fields = [
+            'id', 'project', 'log_date',
+            'weather', 'temp_high_f', 'temp_low_f',
+            'crew_size', 'crew_notes',
+            'work_performed', 'materials_delivered', 'equipment_on_site',
+            'issues', 'visitors',
+            'photo_filenames', 'author_name',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['created_at', 'updated_at']
+
+
+class LienWaiverSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LienWaiver
+        fields = [
+            'id', 'project', 'subcontract',
+            'waiver_type', 'status',
+            'claimant_name', 'customer_name', 'owner_name',
+            'job_address', 'job_description',
+            'through_date', 'amount',
+            'signed_by', 'signed_date', 'notary_name',
+            'pdf_filename', 'notes',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['created_at', 'updated_at']

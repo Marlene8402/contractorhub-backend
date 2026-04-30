@@ -2,10 +2,16 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from .models import Company, TeamMember, Project, Budget, Invoice, ProjectSchedule
+from .models import (
+    Company, TeamMember, Project, Budget, Invoice, ProjectSchedule,
+    Subcontract, SubcontractLineItem, SubLineAllocation,
+    InsuranceCertificate, DailyLog, LienWaiver,
+)
 from .serializers import (
     CompanySerializer, TeamMemberSerializer, ProjectSerializer, ProjectListSerializer,
-    BudgetSerializer, InvoiceSerializer, ProjectScheduleSerializer
+    BudgetSerializer, InvoiceSerializer, ProjectScheduleSerializer,
+    SubcontractSerializer, SubcontractLineItemSerializer, SubLineAllocationSerializer,
+    InsuranceCertificateSerializer, DailyLogSerializer, LienWaiverSerializer,
 )
 
 
@@ -174,5 +180,143 @@ class ProjectScheduleViewSet(viewsets.ModelViewSet):
             return ProjectSchedule.objects.filter(project__company=company)
         except Company.DoesNotExist:
             return ProjectSchedule.objects.none()
+
+
+# ============================================================================
+# A1: multi-tenant viewsets — every entity scoped to the requesting user's
+# company via Project.company. Optional ?project=<id> filter on list.
+# ============================================================================
+
+
+def _user_company(user):
+    """Returns the requesting user's Company, or None if they don't have one."""
+    return Company.objects.filter(owner=user).first()
+
+
+class _CompanyScopedViewSet(viewsets.ModelViewSet):
+    """Base for entities owned (transitively) by Company.
+    Subclasses set `model` and `project_lookup` (the ORM path from the model
+    to a Project foreign key, e.g. 'project' or 'subcontract__project')."""
+    permission_classes = [IsAuthenticated]
+    model = None
+    project_lookup = 'project'
+
+    def get_queryset(self):
+        company = _user_company(self.request.user)
+        if not company:
+            return self.model.objects.none()
+        qs = self.model.objects.filter(**{f'{self.project_lookup}__company': company})
+        project_id = self.request.query_params.get('project')
+        if project_id:
+            qs = qs.filter(**{self.project_lookup: project_id})
+        return qs
+
+
+class SubcontractViewSet(_CompanyScopedViewSet):
+    """Subcontracts on the user's company's projects.
+    Filter by project: GET /api/subcontracts/?project=<id>"""
+    model = Subcontract
+    serializer_class = SubcontractSerializer
+    project_lookup = 'project'
+
+
+class SubcontractLineItemViewSet(_CompanyScopedViewSet):
+    """Line items inside a subcontract.
+    Filter by subcontract: GET /api/subcontract-line-items/?subcontract=<uuid>"""
+    model = SubcontractLineItem
+    serializer_class = SubcontractLineItemSerializer
+    project_lookup = 'subcontract__project'
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        sub_id = self.request.query_params.get('subcontract')
+        if sub_id:
+            qs = qs.filter(subcontract_id=sub_id)
+        return qs
+
+
+class SubLineAllocationViewSet(_CompanyScopedViewSet):
+    """Allocations from invoices to specific subcontract line items."""
+    model = SubLineAllocation
+    serializer_class = SubLineAllocationSerializer
+    project_lookup = 'subcontract__project'
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        sub_id = self.request.query_params.get('subcontract')
+        if sub_id:
+            qs = qs.filter(subcontract_id=sub_id)
+        invoice_id = self.request.query_params.get('invoice')
+        if invoice_id:
+            qs = qs.filter(invoice_id=invoice_id)
+        return qs
+
+
+class InsuranceCertificateViewSet(_CompanyScopedViewSet):
+    """COIs per subcontract.
+    Filter by subcontract: GET /api/insurance-certificates/?subcontract=<uuid>
+    Filter by status:      GET /api/insurance-certificates/?status=expired"""
+    model = InsuranceCertificate
+    serializer_class = InsuranceCertificateSerializer
+    project_lookup = 'subcontract__project'
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        sub_id = self.request.query_params.get('subcontract')
+        if sub_id:
+            qs = qs.filter(subcontract_id=sub_id)
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            # status is computed per-row; filter post-fetch.
+            qs = [c for c in qs if c.status == status_filter]
+        return qs
+
+    @action(detail=False, methods=['get'])
+    def needing_attention(self, request):
+        """Certs that are expired or expiring within 60 days."""
+        company = _user_company(request.user)
+        if not company:
+            return Response([])
+        qs = InsuranceCertificate.objects.filter(subcontract__project__company=company)
+        results = [c for c in qs if c.status in ('expired', 'expiring_this_month', 'expiring_soon')]
+        results.sort(key=lambda c: c.days_until_expiration if c.days_until_expiration is not None else 99999)
+        return Response(InsuranceCertificateSerializer(results, many=True).data)
+
+
+class DailyLogViewSet(_CompanyScopedViewSet):
+    """Daily reports per project.
+    Filter by project: GET /api/daily-logs/?project=<id>
+    Filter by date range: GET /api/daily-logs/?from=YYYY-MM-DD&to=YYYY-MM-DD"""
+    model = DailyLog
+    serializer_class = DailyLogSerializer
+    project_lookup = 'project'
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        d_from = self.request.query_params.get('from')
+        d_to = self.request.query_params.get('to')
+        if d_from:
+            qs = qs.filter(log_date__gte=d_from)
+        if d_to:
+            qs = qs.filter(log_date__lte=d_to)
+        return qs
+
+
+class LienWaiverViewSet(_CompanyScopedViewSet):
+    """Lien waivers per project.
+    Filter: ?project=<id>  ?subcontract=<uuid>  ?status=draft|sent|signed|void"""
+    model = LienWaiver
+    serializer_class = LienWaiverSerializer
+    project_lookup = 'project'
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        sub_id = self.request.query_params.get('subcontract')
+        if sub_id:
+            qs = qs.filter(subcontract_id=sub_id)
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        return qs
 
 
