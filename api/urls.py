@@ -1,7 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework.authtoken.views import obtain_auth_token
-from . import views, qb_views
+from . import views, qb_views, auth_views, billing_views, webhook_views
 
 router = DefaultRouter()
 router.register(r'companies', views.CompanyViewSet, basename='company')
@@ -28,7 +28,17 @@ router.register(r'pay-app-lines', views.PayAppLineViewSet, basename='pay-app-lin
 
 urlpatterns = [
     path('', include(router.urls)),
-    path('auth/token/', obtain_auth_token, name='api-token-auth'),
+
+    # Auth: token issue (login), registration, identity
+    path('auth/token/',    obtain_auth_token,   name='api-token-auth'),
+    path('auth/register/', auth_views.register, name='auth_register'),
+    path('auth/me/',       auth_views.me,       name='auth_me'),
+
+    # Stripe billing
+    path('billing/checkout/', billing_views.create_checkout_session, name='billing_checkout'),
+    path('billing/portal/',   billing_views.create_portal_session,   name='billing_portal'),
+    path('billing/status/',   billing_views.subscription_status,     name='billing_status'),
+    path('webhooks/stripe/',  webhook_views.stripe_webhook,          name='stripe_webhook'),
 
     # QuickBooks OAuth
     path('auth/quickbooks/',          qb_views.quickbooks_auth,       name='qb_auth'),

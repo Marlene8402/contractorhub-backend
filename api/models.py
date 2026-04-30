@@ -7,6 +7,32 @@ from django.utils import timezone
 
 class Company(models.Model):
     """Contractor company profile"""
+
+    # ---- Subscription tiers (mirror Stripe price IDs in settings) ----
+    TIER_STARTER = 'starter'
+    TIER_PRO     = 'pro'
+    TIER_SCALE   = 'scale'
+    TIER_CHOICES = [
+        (TIER_STARTER, 'Starter'),
+        (TIER_PRO,     'Pro'),
+        (TIER_SCALE,   'Scale'),
+    ]
+
+    # Subscription status mirrors a subset of Stripe's subscription.status
+    # plus 'none' for "never subscribed, trial expired".
+    STATUS_TRIALING = 'trialing'
+    STATUS_ACTIVE   = 'active'
+    STATUS_PAST_DUE = 'past_due'
+    STATUS_CANCELED = 'canceled'
+    STATUS_NONE     = 'none'
+    STATUS_CHOICES = [
+        (STATUS_TRIALING, 'Trialing'),
+        (STATUS_ACTIVE,   'Active'),
+        (STATUS_PAST_DUE, 'Past Due'),
+        (STATUS_CANCELED, 'Canceled'),
+        (STATUS_NONE,     'None'),
+    ]
+
     owner = models.OneToOneField(User, on_delete=models.CASCADE)
     name = models.CharField(max_length=255)
     email = models.EmailField()
@@ -15,19 +41,45 @@ class Company(models.Model):
     city = models.CharField(max_length=100, blank=True)
     state = models.CharField(max_length=50, blank=True)
     zip_code = models.CharField(max_length=10, blank=True)
-    
+
     # QB Integration
     qb_access_token = models.TextField(blank=True, null=True)
     qb_refresh_token = models.TextField(blank=True, null=True)
     qb_realm_id = models.CharField(max_length=100, blank=True)
     qb_token_expires_at = models.DateTimeField(blank=True, null=True)
     qb_connected = models.BooleanField(default=False)
-    
+
+    # Stripe billing
+    stripe_customer_id     = models.CharField(max_length=64, blank=True)
+    stripe_subscription_id = models.CharField(max_length=64, blank=True)
+    subscription_tier      = models.CharField(max_length=20, choices=TIER_CHOICES, blank=True)
+    subscription_status    = models.CharField(max_length=20, choices=STATUS_CHOICES,
+                                              default=STATUS_TRIALING)
+    trial_ends_at          = models.DateTimeField(blank=True, null=True)
+    current_period_end     = models.DateTimeField(blank=True, null=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return self.name
+
+    @property
+    def has_active_subscription(self):
+        """True if the company can use the product right now.
+
+        Trial counts as active until trial_ends_at. After that we require a
+        real Stripe subscription in 'active' or 'trialing' state. 'past_due'
+        gets a grace period (Stripe retries cards for ~3 weeks before going
+        'canceled') so we keep them in.
+        """
+        if self.subscription_status == self.STATUS_TRIALING:
+            if self.trial_ends_at and timezone.now() <= self.trial_ends_at:
+                return True
+            # Stripe-driven trial (after they've added a card and Stripe is
+            # tracking trial_end on the subscription itself).
+            return bool(self.stripe_subscription_id)
+        return self.subscription_status in (self.STATUS_ACTIVE, self.STATUS_PAST_DUE)
 
 
 class TeamMember(models.Model):
