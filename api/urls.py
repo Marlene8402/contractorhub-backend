@@ -11,6 +11,14 @@ router.register(r'budgets', views.BudgetViewSet, basename='budget')
 router.register(r'invoices', views.InvoiceViewSet, basename='invoice')
 router.register(r'project-schedules', views.ProjectScheduleViewSet, basename='project-schedule')
 
+# A1: multi-tenant foundation
+router.register(r'subcontracts', views.SubcontractViewSet, basename='subcontract')
+router.register(r'subcontract-line-items', views.SubcontractLineItemViewSet, basename='subcontract-line-item')
+router.register(r'sub-line-allocations', views.SubLineAllocationViewSet, basename='sub-line-allocation')
+router.register(r'insurance-certificates', views.InsuranceCertificateViewSet, basename='insurance-certificate')
+router.register(r'daily-logs', views.DailyLogViewSet, basename='daily-log')
+router.register(r'lien-waivers', views.LienWaiverViewSet, basename='lien-waiver')
+
 urlpatterns = [
     path('', include(router.urls)),
     path('auth/token/', obtain_auth_token, name='api-token-auth'),
