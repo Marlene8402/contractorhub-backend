@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import (
     Company, TeamMember, Project, Budget, Invoice, ProjectSchedule,
+    Vendor,
     Subcontract, SubcontractLineItem, SubLineAllocation,
     InsuranceCertificate, DailyLog, LienWaiver,
     PrimeChangeOrder, SubcontractChangeOrder, OwnerContract,
@@ -94,6 +95,32 @@ class ProjectListSerializer(serializers.ModelSerializer):
 
 # ---------- A1: multi-tenant foundation serializers ----------
 
+class VendorSerializer(serializers.ModelSerializer):
+    """Vendor master record (one per company per vendor — NOT per project).
+    Insurance certs, 1099 status, contact info all live here."""
+    id = serializers.UUIDField(required=False)
+    insurance_certificates = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Vendor
+        fields = [
+            'id', 'company', 'name',
+            'email', 'phone', 'address', 'city', 'state', 'zip_code',
+            'is_1099_vendor', 'vendor_tax_id',
+            'notes',
+            'insurance_certificates',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['company', 'created_at', 'updated_at']
+
+    def get_insurance_certificates(self, vendor):
+        # Lazy import to avoid forward-reference: InsuranceCertificateSerializer
+        # is defined later in this file.
+        return InsuranceCertificateSerializer(
+            vendor.insurance_certificates.all(), many=True
+        ).data
+
+
 class SubcontractLineItemSerializer(serializers.ModelSerializer):
     # Accept client-supplied UUIDs so the Mac app's local IDs become the
     # canonical primary keys. Without this, DRF's ModelSerializer treats
@@ -147,7 +174,7 @@ class InsuranceCertificateSerializer(serializers.ModelSerializer):
     class Meta:
         model = InsuranceCertificate
         fields = [
-            'id', 'subcontract', 'coverage_type',
+            'id', 'vendor', 'subcontract', 'coverage_type',
             'carrier', 'policy_number',
             'effective_date', 'expiration_date',
             'coverage_limit', 'aggregate_limit',
@@ -157,6 +184,10 @@ class InsuranceCertificateSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at',
         ]
         read_only_fields = ['days_until_expiration', 'status', 'created_at', 'updated_at']
+        extra_kwargs = {
+            'vendor':      {'required': False, 'allow_null': True},
+            'subcontract': {'required': False, 'allow_null': True},
+        }
 
 
 class DailyLogSerializer(serializers.ModelSerializer):
