@@ -10,8 +10,14 @@ from .models import (
 class CompanySerializer(serializers.ModelSerializer):
     class Meta:
         model = Company
-        fields = ['id', 'name', 'email', 'phone', 'address', 'city', 'state', 'zip_code', 'qb_connected', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        fields = [
+            'id', 'name', 'email', 'phone', 'address', 'city', 'state', 'zip_code',
+            'qb_connected', 'qb_mode', 'qb_last_synced_at',
+            # QB v2 default GL accounts — Mac Settings UI PATCHes these.
+            'default_qb_expense_account_id', 'default_qb_payment_account_id',
+            'created_at',
+        ]
+        read_only_fields = ['id', 'qb_connected', 'qb_mode', 'qb_last_synced_at', 'created_at']
 
 
 class TeamMemberSerializer(serializers.ModelSerializer):

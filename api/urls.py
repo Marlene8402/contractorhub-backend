@@ -50,6 +50,7 @@ urlpatterns = [
     # QuickBooks sync
     path('qb/sync-status/',           qb_views.qb_sync_status,        name='qb_sync_status'),
     path('qb/sync-invoice/',          qb_views.qb_sync_invoice,       name='qb_sync_invoice'),
+    path('qb/accounts/',              qb_views.qb_accounts,           name='qb_accounts'),
 
     # GL mappings
     path('qb/gl-mappings/',           qb_views.qb_gl_mappings,        name='qb_gl_mappings'),

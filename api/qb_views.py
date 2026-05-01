@@ -103,6 +103,58 @@ def quickbooks_callback(request):
     )
 
 
+# ---------- Chart of accounts (Phase 6 — Mac UI default GL pickers) ----------
+
+@api_view(['GET'])
+@authentication_classes([TokenAuthentication])
+@permission_classes([IsAuthenticated])
+def qb_accounts(request):
+    """List the QB chart of accounts for the user's company.
+
+    Used by the Mac Settings sheet so the user can pick a default Expense
+    account (for vendor Bills) and a default Bank account (for BillPayments).
+
+    Optional query params:
+      ?type=expense  → returns only Expense + Cost of Goods Sold accounts
+      ?type=bank     → returns only Bank + Credit Card accounts
+      (omit)         → returns everything
+
+    Response shape:
+      {"results": [{"id": "7", "name": "Advertising", "type": "Expense"}, ...]}
+    """
+    from api.models import Company
+    from api.qb_service import qb_service_for
+
+    company = Company.objects.filter(owner=request.user).first()
+    if not company:
+        return JsonResponse({"detail": "No company on this account."}, status=400)
+
+    svc = qb_service_for(company)
+    try:
+        accounts = svc.list_chart_of_accounts()
+    except Exception as e:
+        return JsonResponse(
+            {"detail": f"Could not load chart of accounts: {str(e)[:200]}"},
+            status=502,
+        )
+
+    type_filter = (request.GET.get("type") or "").lower()
+    if type_filter == "expense":
+        # Expense + COGS — what you'd post a Bill against.
+        keep = {"Expense", "Cost of Goods Sold", "Other Expense"}
+        accounts = [a for a in accounts if a.account_type in keep]
+    elif type_filter == "bank":
+        keep = {"Bank", "Credit Card"}
+        accounts = [a for a in accounts if a.account_type in keep]
+
+    return JsonResponse({
+        "results": [
+            {"id": a.qb_id, "name": a.name, "type": a.account_type}
+            for a in accounts if a.is_active
+        ]
+    })
+
+
 # ---------- Sync status ----------
 
 @api_view(['GET'])
