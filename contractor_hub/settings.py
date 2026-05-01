@@ -5,7 +5,12 @@ import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = config('SECRET_KEY', default='django-insecure-dev-key-change-in-production')
+# SECURITY: hard-fail if SECRET_KEY is missing. The previous default
+# ('django-insecure-dev-key-change-in-production') is publicly known and
+# would let an attacker forge session cookies and password-reset tokens
+# if it ever silently became active. Better to refuse to boot than run
+# with a known key.
+SECRET_KEY = config('SECRET_KEY')
 
 DEBUG = config('DEBUG', default=True, cast=bool)
 
