@@ -26,6 +26,18 @@ router.register(r'owner-contracts', views.OwnerContractViewSet, basename='owner-
 router.register(r'payment-applications', views.PaymentApplicationViewSet, basename='payment-application')
 router.register(r'pay-app-lines', views.PayAppLineViewSet, basename='pay-app-line')
 
+# A1.6: Tasks + Schedule + Phases + Budget lines + Allocations
+router.register(r'project-phases',     views.ProjectPhaseViewSet,     basename='project-phase')
+router.register(r'schedule-items',     views.ScheduleItemViewSet,     basename='schedule-item')
+router.register(r'project-tasks',      views.ProjectTaskViewSet,      basename='project-task')
+router.register(r'subtasks',           views.SubtaskViewSet,          basename='subtask')
+router.register(r'task-comments',      views.TaskCommentViewSet,      basename='task-comment')
+router.register(r'task-handoffs',      views.TaskHandoffViewSet,      basename='task-handoff')
+router.register(r'task-watchers',      views.TaskWatcherViewSet,      basename='task-watcher')
+router.register(r'task-templates',     views.TaskTemplateViewSet,     basename='task-template')
+router.register(r'budget-line-items',  views.BudgetLineItemViewSet,   basename='budget-line-item')
+router.register(r'budget-allocations', views.BudgetAllocationViewSet, basename='budget-allocation')
+
 urlpatterns = [
     path('', include(router.urls)),
 

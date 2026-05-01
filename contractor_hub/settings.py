@@ -128,6 +128,11 @@ QB_CLIENT_SECRET = config('QB_CLIENT_SECRET', default='')
 QB_REDIRECT_URI = config('QB_REDIRECT_URI', default='https://contractorhub-backend-production.up.railway.app/api/auth/quickbooks/callback/')
 QB_REALM_ID = config('QB_REALM_ID', default='')
 
+# QB v2 — toggle between Intuit's sandbox and production API hosts.
+# Default True (sandbox) until we have paying customers connecting their
+# real QB. Production deploy sets QB_USE_SANDBOX=False env var.
+QB_USE_SANDBOX = config('QB_USE_SANDBOX', default=True, cast=bool)
+
 # Email (for future use)
 EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 

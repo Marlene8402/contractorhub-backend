@@ -11,3 +11,4 @@ gunicorn==21.2.0
 whitenoise==6.6.0
 dj-database-url==3.0.1
 stripe==11.4.1
+responses==0.25.0
