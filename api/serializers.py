@@ -129,6 +129,7 @@ class SubcontractSerializer(serializers.ModelSerializer):
 
 
 class SubLineAllocationSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(required=False)
     class Meta:
         model = SubLineAllocation
         fields = [
@@ -139,6 +140,7 @@ class SubLineAllocationSerializer(serializers.ModelSerializer):
 
 
 class InsuranceCertificateSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(required=False)
     days_until_expiration = serializers.ReadOnlyField()
     status = serializers.ReadOnlyField()
 
@@ -158,6 +160,7 @@ class InsuranceCertificateSerializer(serializers.ModelSerializer):
 
 
 class DailyLogSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(required=False)
     class Meta:
         model = DailyLog
         fields = [
@@ -173,6 +176,7 @@ class DailyLogSerializer(serializers.ModelSerializer):
 
 
 class LienWaiverSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(required=False)
     class Meta:
         model = LienWaiver
         fields = [
@@ -192,6 +196,7 @@ class LienWaiverSerializer(serializers.ModelSerializer):
 
 
 class PrimeChangeOrderSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(required=False)
     class Meta:
         model = PrimeChangeOrder
         fields = [
@@ -207,6 +212,7 @@ class PrimeChangeOrderSerializer(serializers.ModelSerializer):
 
 
 class SubcontractChangeOrderSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(required=False)
     class Meta:
         model = SubcontractChangeOrder
         fields = [
@@ -235,6 +241,7 @@ class OwnerContractSerializer(serializers.ModelSerializer):
 
 
 class PayAppLineSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(required=False)
     total_completed_and_stored = serializers.ReadOnlyField()
     percent_complete = serializers.ReadOnlyField()
     balance_to_finish = serializers.ReadOnlyField()
@@ -254,6 +261,7 @@ class PayAppLineSerializer(serializers.ModelSerializer):
 
 
 class PaymentApplicationSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(required=False)
     lines = PayAppLineSerializer(many=True, read_only=True)
     contract_sum_to_date = serializers.ReadOnlyField()
     total_completed_and_stored_to_date = serializers.ReadOnlyField()
@@ -289,6 +297,7 @@ from .models import (
 
 
 class ProjectPhaseSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(required=False)
     class Meta:
         model = ProjectPhase
         fields = [
@@ -300,6 +309,7 @@ class ProjectPhaseSerializer(serializers.ModelSerializer):
 
 
 class ScheduleItemSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(required=False)
     depends_on = serializers.PrimaryKeyRelatedField(
         many=True, queryset=ScheduleItem.objects.all(), required=False,
     )
@@ -321,6 +331,7 @@ class ScheduleItemSerializer(serializers.ModelSerializer):
 
 
 class SubtaskSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(required=False)
     class Meta:
         model = Subtask
         fields = [
@@ -331,6 +342,7 @@ class SubtaskSerializer(serializers.ModelSerializer):
 
 
 class TaskCommentSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(required=False)
     class Meta:
         model = TaskComment
         fields = ['id', 'task', 'author', 'author_name', 'text', 'timestamp']
@@ -338,6 +350,7 @@ class TaskCommentSerializer(serializers.ModelSerializer):
 
 
 class TaskHandoffSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(required=False)
     class Meta:
         model = TaskHandoff
         fields = [
@@ -356,6 +369,7 @@ class TaskWatcherSerializer(serializers.ModelSerializer):
 
 
 class ProjectTaskSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(required=False)
     """Embeds subtasks/comments/handoffs/watchers as nested read-only collections
     to match the Mac client's existing UserDefaults shape (Subtask[], Comment[],
     Handoff[], watcherIDs[]). Writes go through the dedicated child endpoints."""
