@@ -334,6 +334,49 @@ class ProjectSchedule(models.Model):
 # ============================================================================
 
 
+class Vendor(models.Model):
+    """A subcontractor or supplier company the user works with. One row per
+    vendor per Company (NOT per project) — same vendor across projects shares
+    one record, including their insurance status. The right scope for COI
+    tracking, 1099-NEC filing, payment history, and vendor-level reporting.
+
+    Subcontracts FK to Vendor; Vendor.subcontracts gives every job they've
+    done for you. InsuranceCertificate FK to Vendor; alerts roll up at the
+    vendor level rather than re-tracking per project.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='vendors')
+
+    name = models.CharField(max_length=255)
+    email = models.EmailField(blank=True)
+    phone = models.CharField(max_length=30, blank=True)
+    address = models.CharField(max_length=255, blank=True)
+    city = models.CharField(max_length=100, blank=True)
+    state = models.CharField(max_length=50, blank=True)
+    zip_code = models.CharField(max_length=10, blank=True)
+
+    # 1099 reporting (was on Subcontract; logically belongs to Vendor since
+    # one company is paid the same way across all their work).
+    is_1099_vendor = models.BooleanField(default=False)
+    vendor_tax_id  = models.CharField(max_length=20, blank=True)
+
+    notes = models.TextField(blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['company', 'name'],
+                name='unique_vendor_name_per_company'),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
 class Subcontract(models.Model):
     """A subcontract awarded to a vendor on a project. Multi-line: each line
     has its own CSI code + amount, summed for the contract value."""
@@ -346,7 +389,16 @@ class Subcontract(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='subcontracts')
 
+    # Vendor FK — the source of truth for vendor identity going forward.
+    # Nullable for backwards compat with rows created before the Vendor
+    # master existed (the data migration backfills these from vendor_name).
+    vendor = models.ForeignKey('Vendor', on_delete=models.PROTECT,
+                               related_name='subcontracts', null=True, blank=True)
+
     name = models.CharField(max_length=255)
+    # vendor_name / email / phone are kept as denormalized cache so existing
+    # UI + reports still work without joining Vendor every time. Authoritative
+    # values live on Vendor; these are populated from there on save.
     vendor_name = models.CharField(max_length=255)
     vendor_email = models.EmailField(blank=True)
     vendor_phone = models.CharField(max_length=30, blank=True)
@@ -357,9 +409,9 @@ class Subcontract(models.Model):
     start_date = models.DateField(blank=True, null=True)
     end_date = models.DateField(blank=True, null=True)
 
-    # 1099 flag — required for the Vendor record we push to QuickBooks.
-    # Subcontractors paid as 1099 contractors get flagged so QB tracks them
-    # for year-end 1099-NEC filing. Default False; user toggles per sub.
+    # 1099 flag — kept on Subcontract as a cached read of vendor.is_1099_vendor
+    # for the QBService payload code. New code should read from Vendor; this
+    # column stays for backwards compat with the qb_signals.py path on prod.
     is_1099_vendor = models.BooleanField(default=False,
                                          help_text="Pay this vendor on a 1099 (mirrors QB Vendor.Vendor1099).")
     vendor_tax_id  = models.CharField(max_length=20, blank=True,
@@ -427,7 +479,13 @@ class SubLineAllocation(models.Model):
 
 
 class InsuranceCertificate(models.Model):
-    """COI (Certificate of Insurance) tracked per subcontract per coverage type."""
+    """COI (Certificate of Insurance) tracked per VENDOR per coverage type.
+
+    One vendor's GL policy applies to all their work — tracking it per
+    subcontract leads to data duplication and inconsistent expiration
+    alerts. This is FK'd to Vendor; subcontract is kept as an optional
+    reference for historical rows that pre-date the Vendor master.
+    """
     COVERAGE_CHOICES = [
         ('general_liability', 'General Liability'),
         ('workers_comp',      "Workers' Comp"),
@@ -440,7 +498,14 @@ class InsuranceCertificate(models.Model):
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    subcontract = models.ForeignKey(Subcontract, on_delete=models.CASCADE, related_name='insurance_certificates')
+    vendor = models.ForeignKey('Vendor', on_delete=models.CASCADE,
+                               related_name='insurance_certificates',
+                               null=True, blank=True)
+    # Legacy: kept so old rows still link to a subcontract. New rows should
+    # leave this null and rely on `vendor`.
+    subcontract = models.ForeignKey(Subcontract, on_delete=models.SET_NULL,
+                                    related_name='legacy_insurance_certificates',
+                                    null=True, blank=True)
 
     coverage_type = models.CharField(max_length=30, choices=COVERAGE_CHOICES, default='general_liability')
     carrier = models.CharField(max_length=255, blank=True)

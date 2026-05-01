@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from .models import (
     Company, TeamMember, Project, Budget, Invoice, ProjectSchedule,
+    Vendor,
     Subcontract, SubcontractLineItem, SubLineAllocation,
     InsuranceCertificate, DailyLog, LienWaiver,
     PrimeChangeOrder, SubcontractChangeOrder, OwnerContract,
@@ -13,6 +14,7 @@ from .permissions import HasActiveSubscription
 from .serializers import (
     CompanySerializer, TeamMemberSerializer, ProjectSerializer, ProjectListSerializer,
     BudgetSerializer, InvoiceSerializer, ProjectScheduleSerializer,
+    VendorSerializer,
     SubcontractSerializer, SubcontractLineItemSerializer, SubLineAllocationSerializer,
     InsuranceCertificateSerializer, DailyLogSerializer, LienWaiverSerializer,
     PrimeChangeOrderSerializer, SubcontractChangeOrderSerializer, OwnerContractSerializer,
@@ -217,6 +219,44 @@ class _CompanyScopedViewSet(viewsets.ModelViewSet):
         return qs
 
 
+class VendorViewSet(viewsets.ModelViewSet):
+    """Vendor master records — one per company per vendor (NOT per project).
+    Insurance certs roll up here. Subcontracts FK to Vendor.
+
+    GET /api/vendors/                  list this company's vendors
+    GET /api/vendors/?expiring_in=30   filter to vendors with insurance
+                                       expiring in <=N days (or already expired)
+    """
+    serializer_class = VendorSerializer
+    permission_classes = [IsAuthenticated, HasActiveSubscription]
+
+    def get_queryset(self):
+        company = _user_company(self.request.user)
+        if not company:
+            return Vendor.objects.none()
+        qs = Vendor.objects.filter(company=company)
+
+        # Optional filter: ?expiring_in=30 → vendors whose newest cert
+        # for ANY coverage type expires within N days (or is already past).
+        expiring_in = self.request.query_params.get('expiring_in')
+        if expiring_in:
+            try:
+                days = int(expiring_in)
+            except ValueError:
+                days = 0
+            from datetime import date, timedelta
+            cutoff = date.today() + timedelta(days=days)
+            qs = qs.filter(
+                insurance_certificates__expiration_date__lte=cutoff
+            ).distinct()
+        return qs
+
+    def perform_create(self, serializer):
+        # Stamp the requesting user's company on create. Clients shouldn't
+        # set this themselves; we trust the auth token.
+        serializer.save(company=_user_company(self.request.user))
+
+
 class SubcontractViewSet(_CompanyScopedViewSet):
     """Subcontracts on the user's company's projects.
     Filter by project: GET /api/subcontracts/?project=<id>"""
@@ -257,32 +297,49 @@ class SubLineAllocationViewSet(_CompanyScopedViewSet):
         return qs
 
 
-class InsuranceCertificateViewSet(_CompanyScopedViewSet):
-    """COIs per subcontract.
+class InsuranceCertificateViewSet(viewsets.ModelViewSet):
+    """COIs per VENDOR (post-Vendor-master). Old rows keyed via the legacy
+    `subcontract` FK still surface; we union both paths so existing data
+    isn't lost.
+
+    Filter by vendor:      GET /api/insurance-certificates/?vendor=<uuid>
     Filter by subcontract: GET /api/insurance-certificates/?subcontract=<uuid>
-    Filter by status:      GET /api/insurance-certificates/?status=expired"""
-    model = InsuranceCertificate
+    Filter by status:      GET /api/insurance-certificates/?status=expired
+    """
     serializer_class = InsuranceCertificateSerializer
-    project_lookup = 'subcontract__project'
+    permission_classes = [IsAuthenticated, HasActiveSubscription]
 
     def get_queryset(self):
-        qs = super().get_queryset()
+        from django.db.models import Q
+        company = _user_company(self.request.user)
+        if not company:
+            return InsuranceCertificate.objects.none()
+        # Either vendor-scoped (new) or subcontract-scoped (legacy) but
+        # in both cases the row must belong to this user's company.
+        qs = InsuranceCertificate.objects.filter(
+            Q(vendor__company=company) | Q(subcontract__project__company=company)
+        ).distinct()
+        vendor_id = self.request.query_params.get('vendor')
+        if vendor_id:
+            qs = qs.filter(vendor_id=vendor_id)
         sub_id = self.request.query_params.get('subcontract')
         if sub_id:
             qs = qs.filter(subcontract_id=sub_id)
         status_filter = self.request.query_params.get('status')
         if status_filter:
-            # status is computed per-row; filter post-fetch.
             qs = [c for c in qs if c.status == status_filter]
         return qs
 
     @action(detail=False, methods=['get'])
     def needing_attention(self, request):
         """Certs that are expired or expiring within 60 days."""
+        from django.db.models import Q
         company = _user_company(request.user)
         if not company:
             return Response([])
-        qs = InsuranceCertificate.objects.filter(subcontract__project__company=company)
+        qs = InsuranceCertificate.objects.filter(
+            Q(vendor__company=company) | Q(subcontract__project__company=company)
+        ).distinct()
         results = [c for c in qs if c.status in ('expired', 'expiring_this_month', 'expiring_soon')]
         results.sort(key=lambda c: c.days_until_expiration if c.days_until_expiration is not None else 99999)
         return Response(InsuranceCertificateSerializer(results, many=True).data)

@@ -12,6 +12,7 @@ router.register(r'invoices', views.InvoiceViewSet, basename='invoice')
 router.register(r'project-schedules', views.ProjectScheduleViewSet, basename='project-schedule')
 
 # A1: multi-tenant foundation
+router.register(r'vendors', views.VendorViewSet, basename='vendor')
 router.register(r'subcontracts', views.SubcontractViewSet, basename='subcontract')
 router.register(r'subcontract-line-items', views.SubcontractLineItemViewSet, basename='subcontract-line-item')
 router.register(r'sub-line-allocations', views.SubLineAllocationViewSet, basename='sub-line-allocation')
