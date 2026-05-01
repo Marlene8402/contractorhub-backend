@@ -82,6 +82,18 @@ def quickbooks_callback(request):
             'is_connected': True,
         },
     )
+
+    # QB v2: flip the user's Company into "qbo" mode so the QBService factory
+    # routes future writes through QBOService. (Prior to this, even after
+    # OAuth completed, qb_mode stayed empty and signals never fired.)
+    try:
+        from api.models import Company
+        Company.objects.filter(owner=user).update(qb_mode='qbo')
+    except Exception:
+        # Don't fail the OAuth completion if this fails — the user can
+        # manually flip qb_mode via Django admin.
+        pass
+
     return HttpResponse(
         "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
         "<h2>✅ Connected to QuickBooks</h2>"
