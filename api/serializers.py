@@ -95,6 +95,12 @@ class ProjectListSerializer(serializers.ModelSerializer):
 # ---------- A1: multi-tenant foundation serializers ----------
 
 class SubcontractLineItemSerializer(serializers.ModelSerializer):
+    # Accept client-supplied UUIDs so the Mac app's local IDs become the
+    # canonical primary keys. Without this, DRF's ModelSerializer treats
+    # the PK as auto-generated and silently ignores incoming `id`, breaking
+    # FK references from related rows POSTed right after the parent.
+    id = serializers.UUIDField(required=False)
+
     class Meta:
         model = SubcontractLineItem
         fields = [
@@ -105,6 +111,8 @@ class SubcontractLineItemSerializer(serializers.ModelSerializer):
 
 
 class SubcontractSerializer(serializers.ModelSerializer):
+    # See SubcontractLineItemSerializer.id — same rationale.
+    id = serializers.UUIDField(required=False)
     line_items = SubcontractLineItemSerializer(many=True, read_only=True)
     contract_amount = serializers.ReadOnlyField()
 
