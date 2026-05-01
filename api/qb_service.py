@@ -56,7 +56,10 @@ class QBCustomer:
 
 
 @dataclass(frozen=True)
-class QBAccount:
+class QBChartAccount:
+    """One entry in the QB chart of accounts. Named QBChartAccount (not just
+    QBAccount) to disambiguate from the existing Django QBAccount model that
+    stores OAuth tokens — they are unrelated concepts."""
     qb_id:           str
     name:            str                # "Cost of Goods Sold:Concrete", etc.
     account_type:    str = ""           # "Expense", "Income", "Bank", "Cost of Goods Sold"
@@ -100,7 +103,7 @@ class QBService(ABC):
     def list_customers(self) -> list[QBCustomer]: ...
 
     @abstractmethod
-    def list_chart_of_accounts(self) -> list[QBAccount]: ...
+    def list_chart_of_accounts(self) -> list[QBChartAccount]: ...
 
     @abstractmethod
     def list_items(self) -> list[QBItem]: ...
@@ -146,7 +149,7 @@ class DisconnectedQBService(QBService):
 
     def list_vendors(self) -> list[QBVendor]:                  return []
     def list_customers(self) -> list[QBCustomer]:              return []
-    def list_chart_of_accounts(self) -> list[QBAccount]:       return []
+    def list_chart_of_accounts(self) -> list[QBChartAccount]:  return []
     def list_items(self) -> list[QBItem]:                       return []
 
     def _fail(self) -> SyncResult:
