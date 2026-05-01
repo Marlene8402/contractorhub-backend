@@ -9,6 +9,7 @@ from .models import (
     PrimeChangeOrder, SubcontractChangeOrder, OwnerContract,
     PaymentApplication, PayAppLine,
 )
+from .permissions import HasActiveSubscription
 from .serializers import (
     CompanySerializer, TeamMemberSerializer, ProjectSerializer, ProjectListSerializer,
     BudgetSerializer, InvoiceSerializer, ProjectScheduleSerializer,
@@ -48,7 +49,7 @@ class TeamMemberViewSet(viewsets.ModelViewSet):
 class BudgetViewSet(viewsets.ModelViewSet):
     """Manage project budgets"""
     serializer_class = BudgetSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasActiveSubscription]
 
     def get_queryset(self):
         try:
@@ -62,7 +63,7 @@ class BudgetViewSet(viewsets.ModelViewSet):
 class InvoiceViewSet(viewsets.ModelViewSet):
     """Manage invoices"""
     serializer_class = InvoiceSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasActiveSubscription]
     
     def get_queryset(self):
         try:
@@ -83,7 +84,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
 class ProjectViewSet(viewsets.ModelViewSet):
     """Manage construction projects"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasActiveSubscription]
     
     def get_queryset(self):
         try:
@@ -176,7 +177,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
 class ProjectScheduleViewSet(viewsets.ModelViewSet):
     """Manage project schedules"""
     serializer_class = ProjectScheduleSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasActiveSubscription]
 
     def get_queryset(self):
         try:
@@ -201,7 +202,7 @@ class _CompanyScopedViewSet(viewsets.ModelViewSet):
     """Base for entities owned (transitively) by Company.
     Subclasses set `model` and `project_lookup` (the ORM path from the model
     to a Project foreign key, e.g. 'project' or 'subcontract__project')."""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasActiveSubscription]
     model = None
     project_lookup = 'project'
 

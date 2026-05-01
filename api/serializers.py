@@ -8,10 +8,24 @@ from .models import (
 )
 
 class CompanySerializer(serializers.ModelSerializer):
+    has_active_subscription = serializers.ReadOnlyField()
+
     class Meta:
         model = Company
-        fields = ['id', 'name', 'email', 'phone', 'address', 'city', 'state', 'zip_code', 'qb_connected', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        fields = [
+            'id', 'name', 'email', 'phone', 'address', 'city', 'state', 'zip_code',
+            'qb_connected',
+            'subscription_tier', 'subscription_status',
+            'trial_ends_at', 'current_period_end', 'has_active_subscription',
+            'created_at',
+        ]
+        read_only_fields = [
+            'id', 'created_at',
+            # Billing fields are mutated only by webhook + signup flows, never
+            # by the client directly.
+            'subscription_tier', 'subscription_status',
+            'trial_ends_at', 'current_period_end', 'has_active_subscription',
+        ]
 
 
 class TeamMemberSerializer(serializers.ModelSerializer):

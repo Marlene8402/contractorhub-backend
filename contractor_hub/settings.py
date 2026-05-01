@@ -130,3 +130,25 @@ QB_REALM_ID = config('QB_REALM_ID', default='')
 
 # Email (for future use)
 EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+
+# Stripe billing
+STRIPE_SECRET_KEY      = config('STRIPE_SECRET_KEY',      default='')
+STRIPE_PUBLISHABLE_KEY = config('STRIPE_PUBLISHABLE_KEY', default='')
+STRIPE_WEBHOOK_SECRET  = config('STRIPE_WEBHOOK_SECRET',  default='')
+
+# Tier → Stripe Price ID. Set these per-environment from the Stripe dashboard.
+STRIPE_PRICE_STARTER = config('STRIPE_PRICE_STARTER', default='')  # $79/mo
+STRIPE_PRICE_PRO     = config('STRIPE_PRICE_PRO',     default='')  # $199/mo
+STRIPE_PRICE_SCALE   = config('STRIPE_PRICE_SCALE',   default='')  # $349/mo
+
+# URLs Stripe Checkout redirects to after success / cancel. The Mac app uses
+# its own custom-scheme deep links; the web app uses the marketing site.
+STRIPE_CHECKOUT_SUCCESS_URL = config('STRIPE_CHECKOUT_SUCCESS_URL',
+                                     default='contractorhub://billing/success')
+STRIPE_CHECKOUT_CANCEL_URL  = config('STRIPE_CHECKOUT_CANCEL_URL',
+                                     default='contractorhub://billing/cancel')
+STRIPE_PORTAL_RETURN_URL    = config('STRIPE_PORTAL_RETURN_URL',
+                                     default='contractorhub://billing/portal-return')
+
+# Days of free trial granted on signup. No card required to start.
+SIGNUP_TRIAL_DAYS = config('SIGNUP_TRIAL_DAYS', default=14, cast=int)
