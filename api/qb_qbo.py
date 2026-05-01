@@ -478,12 +478,28 @@ class QBOService(QBService):
         return body
 
     def _bill_payment_body(self, p: BillPaymentPayload, link: QBLink | None) -> dict:
+        # Look up VendorRef by reading the Bill from QB. Intuit requires
+        # VendorRef on BillPayment even though it's redundant with the
+        # LinkedTxn[].TxnId.
+        bill_data = self._request(
+            "GET", f"/bill/{p.bill_qb_id}",
+            log_entity_type="Bill", log_entity_id=p.bill_qb_id,
+        )
+        vendor_ref = (((bill_data or {}).get("Bill") or {}).get("VendorRef") or {}).get("value")
+        if not vendor_ref:
+            raise QBOPermanentError("Cannot record bill payment: VendorRef not found on Bill.")
+
+        # PayType "Check" → bank account goes in CheckPayment.BankAccountRef.
+        # PayType "CreditCard" would be CreditCardPayment.CCAccountRef.
+        # A bare top-level AccountRef is NOT a valid BillPayment property —
+        # earlier draft of this code had it there and Intuit rejected with
+        # "failed to parse json object; a property specified is unsupported".
         body: dict[str, Any] = {
-            "VendorRef": {"value": ""},   # Will be derived by Intuit from BillRef? No — we need it.
-            "TotalAmt":  float(p.amount),
-            "PayType":   "Check",
-            "AccountRef": {"value": p.pay_account_ref},
-            "TxnDate":   p.pay_date.isoformat(),
+            "VendorRef":    {"value": vendor_ref},
+            "TotalAmt":     float(p.amount),
+            "PayType":      "Check",
+            "CheckPayment": {"BankAccountRef": {"value": p.pay_account_ref}},
+            "TxnDate":      p.pay_date.isoformat(),
             "Line": [{
                 "Amount": float(p.amount),
                 "LinkedTxn": [{
@@ -494,26 +510,6 @@ class QBOService(QBService):
         }
         if p.private_note:
             body["PrivateNote"] = p.private_note
-        # BillPayment requires VendorRef; look it up from the Bill's link
-        bill_link = QBLink.objects.filter(
-            company=self.company, qb_entity_id=p.bill_qb_id, qb_entity_type="Bill",
-        ).first()
-        # As a fallback, fetch Bill from QB to get VendorRef. Optimistic path:
-        # if the related Subcontract has a Vendor link via the Invoice's
-        # subcontract FK, use that. For v1 we keep it simple — fetch the Bill.
-        if bill_link is None or not bill_link.qb_entity_id:
-            raise QBOPermanentError(
-                "Cannot record bill payment: matching Bill not found in QBLink."
-            )
-        # Read Bill to grab its VendorRef
-        bill_data = self._request(
-            "GET", f"/bill/{p.bill_qb_id}",
-            log_entity_type="Bill", log_entity_id=p.bill_qb_id,
-        )
-        vendor_ref = (((bill_data or {}).get("Bill") or {}).get("VendorRef") or {}).get("value")
-        if not vendor_ref:
-            raise QBOPermanentError("Cannot record bill payment: VendorRef not found on Bill.")
-        body["VendorRef"] = {"value": vendor_ref}
         return body
 
     def _addr(self, a) -> dict:
@@ -529,10 +525,16 @@ class QBOService(QBService):
     # ----- QBLink helpers -----
 
     def _existing_link(self, ch_id: str, ch_type: str, qb_type: str) -> QBLink | None:
+        # Filter by qb_type too — one CH entity can have multiple QB
+        # counterparts (e.g. an Invoice → both a Bill and a BillPayment).
+        # Original (pre-0010) implementation matched only on (ch_type, ch_id),
+        # which silently overwrote a Bill QBLink with a BillPayment QBLink
+        # when both fired for the same Invoice.
         return QBLink.objects.filter(
             company=self.company,
             contractorhub_entity_type=ch_type,
             contractorhub_entity_id=ch_id,
+            qb_entity_type=qb_type,
         ).first()
 
     def _upsert_client_customer(self, p: CustomerJobPayload) -> SyncResult:
@@ -545,29 +547,25 @@ class QBOService(QBService):
         body = self._client_body(p, link)
         return self._upsert("Customer", body, link, anchor_id, "Client")
 
+    # NOTE: all three _record_link_* helpers include qb_entity_type in the
+    # lookup keys (post-0010). Without that, the update_or_create would
+    # match the WRONG row when an Invoice has both a Bill QBLink and a
+    # BillPayment QBLink — silently overwriting one with the other.
+
     def _record_link_success(self, link, ch_id, ch_type, qb_type, qb_id, sync_token):
-        if link is None:
-            link, _ = QBLink.objects.update_or_create(
-                company=self.company,
-                contractorhub_entity_type=ch_type,
-                contractorhub_entity_id=ch_id,
-                defaults={
-                    "qb_entity_type": qb_type,
-                    "qb_entity_id":   qb_id,
-                    "qb_sync_token":  sync_token,
-                    "sync_state":     "synced",
-                    "failure_reason": "",
-                    "last_synced_at": timezone.now(),
-                },
-            )
-        else:
-            link.qb_entity_type = qb_type
-            link.qb_entity_id   = qb_id
-            link.qb_sync_token  = sync_token
-            link.sync_state     = "synced"
-            link.failure_reason = ""
-            link.last_synced_at = timezone.now()
-            link.save()
+        link, _ = QBLink.objects.update_or_create(
+            company=self.company,
+            contractorhub_entity_type=ch_type,
+            contractorhub_entity_id=ch_id,
+            qb_entity_type=qb_type,
+            defaults={
+                "qb_entity_id":   qb_id,
+                "qb_sync_token":  sync_token,
+                "sync_state":     "synced",
+                "failure_reason": "",
+                "last_synced_at": timezone.now(),
+            },
+        )
         return link
 
     def _record_link_failure(self, link, ch_id, ch_type, qb_type, reason):
@@ -575,8 +573,8 @@ class QBOService(QBService):
             company=self.company,
             contractorhub_entity_type=ch_type,
             contractorhub_entity_id=ch_id,
+            qb_entity_type=qb_type,
             defaults={
-                "qb_entity_type": qb_type,
                 "sync_state":     "failed_permanent",
                 "failure_reason": reason[:1000],
             },
@@ -587,8 +585,8 @@ class QBOService(QBService):
             company=self.company,
             contractorhub_entity_type=ch_type,
             contractorhub_entity_id=ch_id,
+            qb_entity_type=qb_type,
             defaults={
-                "qb_entity_type": qb_type,
                 "sync_state":     "queued",
                 "failure_reason": reason[:1000],
             },

@@ -43,6 +43,14 @@ class Company(models.Model):
     qb_last_synced_at = models.DateTimeField(blank=True, null=True,
                                              help_text="Timestamp of last successful QBSyncLog row for this Company.")
 
+    # Default GL account ID in QB used when posting vendor Bills that don't
+    # specify a per-line account. User picks this in Settings → QuickBooks
+    # after their chart of accounts has been pulled. Empty until set.
+    default_qb_expense_account_id = models.CharField(max_length=64, blank=True,
+        help_text="QB Account.Id used as the default expense GL when posting vendor Bills.")
+    default_qb_payment_account_id = models.CharField(max_length=64, blank=True,
+        help_text="QB Account.Id (Bank/Credit Card) used as the default for BillPayments.")
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -158,7 +166,19 @@ class Budget(models.Model):
 
 
 class Invoice(models.Model):
-    """Invoices to clients"""
+    """Invoices in either direction.
+
+    kind == 'client_invoice' (default, original behavior): an invoice WE
+        send to a client. Becomes a QB Invoice (revenue / AR).
+
+    kind == 'vendor_bill': an invoice we RECEIVED from a subcontractor and
+        entered for tracking + payment. Becomes a QB Bill (expense / AP).
+        When such an Invoice transitions to status='paid', a separate QB
+        BillPayment is recorded against the existing Bill.
+
+    The kind field defaults to 'client_invoice' so existing rows + existing
+    Mac client behavior are unchanged.
+    """
     STATUS_CHOICES = [
         ('draft', 'Draft'),
         ('sent', 'Sent'),
@@ -166,22 +186,38 @@ class Invoice(models.Model):
         ('paid', 'Paid'),
         ('overdue', 'Overdue'),
     ]
-    
+
+    KIND_CLIENT_INVOICE = 'client_invoice'
+    KIND_VENDOR_BILL    = 'vendor_bill'
+    KIND_CHOICES = [
+        (KIND_CLIENT_INVOICE, 'Client invoice (we send → QB Invoice)'),
+        (KIND_VENDOR_BILL,    'Vendor bill (we receive → QB Bill)'),
+    ]
+
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='invoices')
     invoice_number = models.CharField(max_length=100, unique=True)
-    
+
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     description = models.TextField(blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
-    
+
+    # QB v2 vendor-bill flow
+    kind = models.CharField(max_length=20, choices=KIND_CHOICES, default=KIND_CLIENT_INVOICE,
+        help_text="client_invoice (default; sent to client) vs vendor_bill (received from sub).")
+    subcontract = models.ForeignKey('Subcontract', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='vendor_bills',
+        help_text="When kind=='vendor_bill', the Subcontract this bill is from. Used to resolve the QB Vendor.")
+    vendor_invoice_number = models.CharField(max_length=100, blank=True,
+        help_text="When kind=='vendor_bill', the vendor's own invoice number (becomes QB Bill DocNumber).")
+
     issue_date = models.DateField(auto_now_add=True)
     due_date = models.DateField()
     paid_date = models.DateField(blank=True, null=True)
-    
-    # QB Integration
+
+    # QB Integration (legacy)
     qb_invoice_id = models.CharField(max_length=100, blank=True)
     qb_synced = models.BooleanField(default=False)
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1174,7 +1210,13 @@ class QBLink(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = ('company', 'contractorhub_entity_type', 'contractorhub_entity_id')
+        # One CH entity can have MULTIPLE QB counterparts of different types.
+        # Example: an Invoice (vendor_bill kind) → both a "Bill" QBLink and
+        # a "BillPayment" QBLink. Original Phase 1 design only allowed one
+        # QB counterpart per CH entity, which broke the bill+payment flow.
+        # Fixed in 0010 by adding qb_entity_type to the uniqueness key.
+        unique_together = ('company', 'contractorhub_entity_type',
+                           'contractorhub_entity_id', 'qb_entity_type')
         indexes = [
             models.Index(fields=['company', 'sync_state']),
             models.Index(fields=['company', 'qb_entity_type', 'qb_entity_id']),
