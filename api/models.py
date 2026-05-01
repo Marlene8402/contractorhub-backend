@@ -7,6 +7,15 @@ from django.utils import timezone
 
 class Company(models.Model):
     """Contractor company profile"""
+
+    # QB integration mode — drives which QBService implementation handles
+    # this Company's writes. See QB_INTEGRATION_v2_SPEC.md §4.
+    QB_MODE_CHOICES = [
+        ('qbo',  'QuickBooks Online (REST API)'),
+        ('qbwc', 'QuickBooks Desktop (Web Connector polled SOAP)'),
+        ('',     'Not connected'),
+    ]
+
     owner = models.OneToOneField(User, on_delete=models.CASCADE)
     name = models.CharField(max_length=255)
     email = models.EmailField()
@@ -15,14 +24,25 @@ class Company(models.Model):
     city = models.CharField(max_length=100, blank=True)
     state = models.CharField(max_length=50, blank=True)
     zip_code = models.CharField(max_length=10, blank=True)
-    
-    # QB Integration
+
+    # QB Integration (legacy; kept for backwards compat with the existing
+    # QBO OAuth code in qb_views.py until that's refactored to use QBOService).
     qb_access_token = models.TextField(blank=True, null=True)
     qb_refresh_token = models.TextField(blank=True, null=True)
     qb_realm_id = models.CharField(max_length=100, blank=True)
     qb_token_expires_at = models.DateTimeField(blank=True, null=True)
     qb_connected = models.BooleanField(default=False)
-    
+
+    # QB v2 fields (Session B). qb_mode picks the QBService implementation;
+    # qbwc_password is the shared secret in the Web Connector .qwc file
+    # (only used when qb_mode == 'qbwc').
+    qb_mode = models.CharField(max_length=10, choices=QB_MODE_CHOICES, blank=True, default='',
+                               help_text="Drives QBService factory dispatch.")
+    qbwc_password   = models.CharField(max_length=64, blank=True,
+                                        help_text="Shared secret for QB Web Connector authentication.")
+    qb_last_synced_at = models.DateTimeField(blank=True, null=True,
+                                             help_text="Timestamp of last successful QBSyncLog row for this Company.")
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -285,6 +305,14 @@ class Subcontract(models.Model):
 
     start_date = models.DateField(blank=True, null=True)
     end_date = models.DateField(blank=True, null=True)
+
+    # 1099 flag — required for the Vendor record we push to QuickBooks.
+    # Subcontractors paid as 1099 contractors get flagged so QB tracks them
+    # for year-end 1099-NEC filing. Default False; user toggles per sub.
+    is_1099_vendor = models.BooleanField(default=False,
+                                         help_text="Pay this vendor on a 1099 (mirrors QB Vendor.Vendor1099).")
+    vendor_tax_id  = models.CharField(max_length=20, blank=True,
+                                      help_text="EIN or SSN, for 1099-NEC reporting. Stored as-is; surface masked in UI.")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1092,3 +1120,65 @@ class BudgetAllocation(models.Model):
 
     def __str__(self):
         return f"${self.amount} · inv {self.invoice_id} → {self.csi_code}"
+
+
+# ============================================================================
+# QB Integration v2 — see QB_INTEGRATION_v2_SPEC.md
+#
+# QBLink: maps a ContractorHub entity to its QuickBooks counterpart, regardless
+# of whether the customer uses QBO (REST) or QBWC (SOAP). One row per
+# (CH entity, QB entity) pair. Replaces the scattered qb_*_id columns on
+# Subcontract/Project/Invoice over time (those stay for backwards compat in v1).
+# ============================================================================
+
+
+class QBLink(models.Model):
+    """A single mapping between a ContractorHub entity and the QB record it
+    corresponds to. Used by QBService implementations to:
+    - Detect "already pushed" → do an update instead of a create (idempotency)
+    - Find the QB record when a follow-up event fires (e.g., when an Invoice
+      moves from approved → paid, look up the Bill we already created so we
+      can attach a BillPayment to it)
+    - Surface per-row sync state in the Mac UI."""
+
+    SYNC_STATE_CHOICES = [
+        ('synced',           'Synced'),
+        ('queued',           'Queued (waiting for QBWC poll or retry)'),
+        ('failed_permanent', 'Failed permanently'),
+    ]
+
+    # Polymorphic reference: store the CH entity type as a string + ID so we
+    # don't need to add a FK column for every entity that gets QB-linked.
+    # (Django GenericForeignKey is overkill here; we don't need reverse lookups.)
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='qb_links')
+
+    contractorhub_entity_type = models.CharField(max_length=50,
+        help_text='e.g. "Subcontract", "Project", "Invoice".')
+    contractorhub_entity_id   = models.CharField(max_length=64,
+        help_text='UUID or int as string — whatever the source entity uses.')
+
+    qb_entity_type = models.CharField(max_length=50,
+        help_text='e.g. "Vendor", "Customer", "Bill", "Invoice", "BillPayment".')
+    qb_entity_id   = models.CharField(max_length=64, blank=True,
+        help_text='Empty until first successful sync. Populated from QB response.')
+
+    qb_sync_token = models.CharField(max_length=20, blank=True,
+        help_text="QBO's optimistic-lock SyncToken; QBWC's EditSequence. Updated on every successful write.")
+
+    sync_state     = models.CharField(max_length=20, choices=SYNC_STATE_CHOICES, default='queued')
+    failure_reason = models.TextField(blank=True)
+    last_synced_at = models.DateTimeField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('company', 'contractorhub_entity_type', 'contractorhub_entity_id')
+        indexes = [
+            models.Index(fields=['company', 'sync_state']),
+            models.Index(fields=['company', 'qb_entity_type', 'qb_entity_id']),
+        ]
+
+    def __str__(self):
+        return f"{self.contractorhub_entity_type}/{self.contractorhub_entity_id} → {self.qb_entity_type}/{self.qb_entity_id} [{self.sync_state}]"
