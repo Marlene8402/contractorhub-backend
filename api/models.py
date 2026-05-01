@@ -7,6 +7,15 @@ from django.utils import timezone
 
 class Company(models.Model):
     """Contractor company profile"""
+
+    # QB integration mode — drives which QBService implementation handles
+    # this Company's writes. See QB_INTEGRATION_v2_SPEC.md §4.
+    QB_MODE_CHOICES = [
+        ('qbo',  'QuickBooks Online (REST API)'),
+        ('qbwc', 'QuickBooks Desktop (Web Connector polled SOAP)'),
+        ('',     'Not connected'),
+    ]
+
     owner = models.OneToOneField(User, on_delete=models.CASCADE)
     name = models.CharField(max_length=255)
     email = models.EmailField()
@@ -15,14 +24,33 @@ class Company(models.Model):
     city = models.CharField(max_length=100, blank=True)
     state = models.CharField(max_length=50, blank=True)
     zip_code = models.CharField(max_length=10, blank=True)
-    
-    # QB Integration
+
+    # QB Integration (legacy; kept for backwards compat with the existing
+    # QBO OAuth code in qb_views.py until that's refactored to use QBOService).
     qb_access_token = models.TextField(blank=True, null=True)
     qb_refresh_token = models.TextField(blank=True, null=True)
     qb_realm_id = models.CharField(max_length=100, blank=True)
     qb_token_expires_at = models.DateTimeField(blank=True, null=True)
     qb_connected = models.BooleanField(default=False)
-    
+
+    # QB v2 fields (Session B). qb_mode picks the QBService implementation;
+    # qbwc_password is the shared secret in the Web Connector .qwc file
+    # (only used when qb_mode == 'qbwc').
+    qb_mode = models.CharField(max_length=10, choices=QB_MODE_CHOICES, blank=True, default='',
+                               help_text="Drives QBService factory dispatch.")
+    qbwc_password   = models.CharField(max_length=64, blank=True,
+                                        help_text="Shared secret for QB Web Connector authentication.")
+    qb_last_synced_at = models.DateTimeField(blank=True, null=True,
+                                             help_text="Timestamp of last successful QBSyncLog row for this Company.")
+
+    # Default GL account ID in QB used when posting vendor Bills that don't
+    # specify a per-line account. User picks this in Settings → QuickBooks
+    # after their chart of accounts has been pulled. Empty until set.
+    default_qb_expense_account_id = models.CharField(max_length=64, blank=True,
+        help_text="QB Account.Id used as the default expense GL when posting vendor Bills.")
+    default_qb_payment_account_id = models.CharField(max_length=64, blank=True,
+        help_text="QB Account.Id (Bank/Credit Card) used as the default for BillPayments.")
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -138,7 +166,19 @@ class Budget(models.Model):
 
 
 class Invoice(models.Model):
-    """Invoices to clients"""
+    """Invoices in either direction.
+
+    kind == 'client_invoice' (default, original behavior): an invoice WE
+        send to a client. Becomes a QB Invoice (revenue / AR).
+
+    kind == 'vendor_bill': an invoice we RECEIVED from a subcontractor and
+        entered for tracking + payment. Becomes a QB Bill (expense / AP).
+        When such an Invoice transitions to status='paid', a separate QB
+        BillPayment is recorded against the existing Bill.
+
+    The kind field defaults to 'client_invoice' so existing rows + existing
+    Mac client behavior are unchanged.
+    """
     STATUS_CHOICES = [
         ('draft', 'Draft'),
         ('sent', 'Sent'),
@@ -146,22 +186,38 @@ class Invoice(models.Model):
         ('paid', 'Paid'),
         ('overdue', 'Overdue'),
     ]
-    
+
+    KIND_CLIENT_INVOICE = 'client_invoice'
+    KIND_VENDOR_BILL    = 'vendor_bill'
+    KIND_CHOICES = [
+        (KIND_CLIENT_INVOICE, 'Client invoice (we send → QB Invoice)'),
+        (KIND_VENDOR_BILL,    'Vendor bill (we receive → QB Bill)'),
+    ]
+
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='invoices')
     invoice_number = models.CharField(max_length=100, unique=True)
-    
+
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     description = models.TextField(blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
-    
+
+    # QB v2 vendor-bill flow
+    kind = models.CharField(max_length=20, choices=KIND_CHOICES, default=KIND_CLIENT_INVOICE,
+        help_text="client_invoice (default; sent to client) vs vendor_bill (received from sub).")
+    subcontract = models.ForeignKey('Subcontract', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='vendor_bills',
+        help_text="When kind=='vendor_bill', the Subcontract this bill is from. Used to resolve the QB Vendor.")
+    vendor_invoice_number = models.CharField(max_length=100, blank=True,
+        help_text="When kind=='vendor_bill', the vendor's own invoice number (becomes QB Bill DocNumber).")
+
     issue_date = models.DateField(auto_now_add=True)
     due_date = models.DateField()
     paid_date = models.DateField(blank=True, null=True)
-    
-    # QB Integration
+
+    # QB Integration (legacy)
     qb_invoice_id = models.CharField(max_length=100, blank=True)
     qb_synced = models.BooleanField(default=False)
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -285,6 +341,14 @@ class Subcontract(models.Model):
 
     start_date = models.DateField(blank=True, null=True)
     end_date = models.DateField(blank=True, null=True)
+
+    # 1099 flag — required for the Vendor record we push to QuickBooks.
+    # Subcontractors paid as 1099 contractors get flagged so QB tracks them
+    # for year-end 1099-NEC filing. Default False; user toggles per sub.
+    is_1099_vendor = models.BooleanField(default=False,
+                                         help_text="Pay this vendor on a 1099 (mirrors QB Vendor.Vendor1099).")
+    vendor_tax_id  = models.CharField(max_length=20, blank=True,
+                                      help_text="EIN or SSN, for 1099-NEC reporting. Stored as-is; surface masked in UI.")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -737,3 +801,426 @@ class PayAppLine(models.Model):
     def retainage_amount(self, app_rate):
         rate = self.retainage_percent_override if self.retainage_percent_override > 0 else app_rate
         return self.total_completed_and_stored * rate / 100
+
+
+# ============================================================================
+# A1.6: Tasks + Schedule + ProjectPhase + Budget line items + Invoice allocations
+# Mirrors what the Mac app currently stores in UserDefaults (see ProjectTaskStore,
+# ScheduleStore, BudgetStore in ContractorHubMac/Sources/). UUID PKs so the Mac
+# client keeps its existing IDs across sync. Subtasks/comments/handoffs/watchers
+# are real FK rows on the backend (better querying) but the ProjectTask
+# serializer returns them embedded to match the Mac client's existing shape.
+# ============================================================================
+
+
+class ProjectPhase(models.Model):
+    """Per-project phase (Pre-Construction, Mobilization, Foundation, Drywall, ...).
+    Mac app currently uses a fixed enum (bidding/post_award/in_progress/closeout);
+    the backend supports custom phases per project. New projects get the four
+    Mac defaults seeded by ProjectViewSet.perform_create."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='phases')
+
+    name       = models.CharField(max_length=100)
+    sort_order = models.IntegerField(default=0)
+    color_hex  = models.CharField(max_length=9, blank=True, help_text='Optional UI tint, e.g. "#1F6FEB"')
+
+    started_at  = models.DateField(blank=True, null=True)
+    finished_at = models.DateField(blank=True, null=True)
+    is_active   = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['project', 'sort_order', 'name']
+        unique_together = ('project', 'name')
+
+    def __str__(self):
+        return f"{self.project.name} · {self.name}"
+
+
+class ScheduleItem(models.Model):
+    """Unified schedule entry. The Mac app's ScheduleStore stores a single
+    polymorphic struct discriminated by `kind` (task/milestone/submittal/rfi)
+    plus shared date/assignment fields and kind-specific extras. We mirror
+    that shape so the Mac client can sync without reshaping."""
+    KIND_CHOICES = [
+        ('task',       'Gantt Task'),
+        ('milestone',  'Milestone'),
+        ('look_ahead', 'Look-Ahead'),
+        ('submittal',  'Submittal'),
+        ('rfi',        'RFI'),
+    ]
+    APPROVAL_CHOICES = [
+        ('open',             'Open'),
+        ('submitted',        'Submitted'),
+        ('revise_resubmit',  'Revise & Resubmit'),
+        ('approved',         'Approved'),
+        ('rejected',         'Rejected'),
+        ('answered',         'Answered'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='schedule_items')
+
+    kind    = models.CharField(max_length=20, choices=KIND_CHOICES, default='task')
+    title   = models.CharField(max_length=255)
+    details = models.TextField(blank=True)
+
+    # Common timing
+    start_date       = models.DateField(blank=True, null=True)
+    end_date         = models.DateField(blank=True, null=True)
+    percent_complete = models.IntegerField(default=0)
+    depends_on       = models.ManyToManyField('self', symmetrical=False, blank=True,
+                                              related_name='dependents')
+
+    phase = models.ForeignKey(ProjectPhase, on_delete=models.SET_NULL,
+                              null=True, blank=True, related_name='schedule_items')
+
+    # Common assignment
+    assigned_to      = models.ForeignKey(TeamMember, on_delete=models.SET_NULL,
+                                         null=True, blank=True, related_name='schedule_items')
+    assigned_to_name = models.CharField(max_length=255, blank=True,
+                                        help_text='Snapshot of assignee name at assignment time')
+    trade            = models.CharField(max_length=100, blank=True, help_text='"Electrical", "Plumbing" — used by look-ahead grouping')
+    location         = models.CharField(max_length=255, blank=True)
+
+    # Submittal-specific
+    spec_section      = models.CharField(max_length=100, blank=True, help_text='CSI section, e.g. "07 21 13 — Insulation"')
+    submitted_date    = models.DateField(blank=True, null=True)
+    required_by_date  = models.DateField(blank=True, null=True)
+    approved_date     = models.DateField(blank=True, null=True)
+    approval_status   = models.CharField(max_length=20, choices=APPROVAL_CHOICES, default='open')
+
+    # RFI-specific
+    rfi_number      = models.CharField(max_length=50, blank=True)
+    question        = models.TextField(blank=True)
+    answer          = models.TextField(blank=True)
+    responded_date  = models.DateField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['project', 'start_date', 'created_at']
+        indexes = [
+            models.Index(fields=['project', 'kind']),
+            models.Index(fields=['project', 'start_date']),
+        ]
+
+    def __str__(self):
+        return f"[{self.get_kind_display()}] {self.title}"
+
+
+class ProjectTask(models.Model):
+    """Hand-off-aware task with status flow open → in_progress → needs_verification → done.
+    Mirrors the Mac app's ProjectTask struct. Subtasks/comments/handoffs/watchers
+    are real FK relations (one row per child); the API serializer returns them
+    embedded to match the Mac client's shape."""
+    CATEGORY_CHOICES = [
+        ('punch',         'Punchlist'),
+        ('inspection',    'Inspection'),
+        ('materials',     'Materials'),
+        ('office',        'Office'),
+        ('subcontractor', 'Subcontractor'),
+        ('other',         'Other'),
+    ]
+    PRIORITY_CHOICES = [
+        ('low',    'Low'),
+        ('normal', 'Normal'),
+        ('high',   'High'),
+        ('urgent', 'Urgent'),
+    ]
+    STATUS_CHOICES = [
+        ('open',                'Open'),
+        ('in_progress',         'In Progress'),
+        ('blocked',             'Blocked'),
+        ('needs_verification',  'Needs Verification'),
+        ('done',                'Done'),
+        ('wont_fix',            "Won't Fix"),
+    ]
+    RECURRENCE_CHOICES = [
+        ('none',     'None'),
+        ('daily',    'Daily'),
+        ('weekly',   'Weekly'),
+        ('biweekly', 'Biweekly'),
+        ('monthly',  'Monthly'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='tasks')
+
+    title    = models.CharField(max_length=255)
+    details  = models.TextField(blank=True)
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default='other')
+    priority = models.CharField(max_length=10, choices=PRIORITY_CHOICES, default='normal')
+    status   = models.CharField(max_length=20, choices=STATUS_CHOICES, default='open')
+
+    assigned_to      = models.ForeignKey(TeamMember, on_delete=models.SET_NULL,
+                                         null=True, blank=True, related_name='assigned_tasks')
+    assigned_to_name = models.CharField(max_length=255, blank=True)
+
+    due_date = models.DateField(blank=True, null=True)
+    location = models.CharField(max_length=255, blank=True)
+
+    completed_at = models.DateTimeField(blank=True, null=True)
+
+    recurrence            = models.CharField(max_length=10, choices=RECURRENCE_CHOICES, default='none')
+    reminder_days_before  = models.IntegerField(default=0)
+    last_reminder_sent    = models.DateTimeField(blank=True, null=True)
+
+    phase = models.ForeignKey(ProjectPhase, on_delete=models.SET_NULL,
+                              null=True, blank=True, related_name='tasks')
+
+    photo_filenames = models.JSONField(default=list, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['project', 'status']),
+            models.Index(fields=['assigned_to', 'status']),
+        ]
+
+    def __str__(self):
+        return f"{self.title} ({self.status})"
+
+
+class Subtask(models.Model):
+    """Checklist item under a ProjectTask. The Mac app embeds these as a JSON
+    array on the parent task; we store them as FK rows but the serializer
+    returns them embedded to match the Mac shape."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    task = models.ForeignKey(ProjectTask, on_delete=models.CASCADE, related_name='subtasks')
+
+    title        = models.CharField(max_length=255)
+    is_done      = models.BooleanField(default=False)
+    completed_at = models.DateTimeField(blank=True, null=True)
+    due_date     = models.DateField(blank=True, null=True)
+    sort_order   = models.IntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['sort_order', 'created_at']
+
+    def __str__(self):
+        return self.title
+
+
+class TaskComment(models.Model):
+    """Comment on a ProjectTask. Author is a snapshot of name + optional FK
+    so the comment survives if the team member is later deleted."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    task = models.ForeignKey(ProjectTask, on_delete=models.CASCADE, related_name='comments')
+
+    author      = models.ForeignKey(TeamMember, on_delete=models.SET_NULL,
+                                    null=True, blank=True, related_name='task_comments')
+    author_name = models.CharField(max_length=255, blank=True)
+    text        = models.TextField()
+    timestamp   = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['timestamp']
+
+    def __str__(self):
+        return f"{self.author_name}: {self.text[:60]}"
+
+
+class TaskHandoff(models.Model):
+    """Audit row for "I'm handing this task off to X" — append-only history.
+    Mac app currently doesn't track accept/reject; we leave that for later
+    rather than adding state the Mac UI doesn't surface yet."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    task = models.ForeignKey(ProjectTask, on_delete=models.CASCADE, related_name='handoffs')
+
+    from_member = models.ForeignKey(TeamMember, on_delete=models.SET_NULL,
+                                    null=True, blank=True, related_name='handoffs_sent')
+    from_name   = models.CharField(max_length=255, blank=True)
+    to_member   = models.ForeignKey(TeamMember, on_delete=models.SET_NULL,
+                                    null=True, blank=True, related_name='handoffs_received')
+    to_name     = models.CharField(max_length=255, blank=True)
+
+    note      = models.TextField(blank=True)
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['timestamp']
+
+    def __str__(self):
+        return f"{self.from_name} → {self.to_name}"
+
+
+class TaskWatcher(models.Model):
+    """Join row: which TeamMembers want notifications about a ProjectTask.
+    Mac app stores this as a list of IDs on the task; we use a join table
+    so the reverse query ('tasks I'm watching') is cheap."""
+    task        = models.ForeignKey(ProjectTask, on_delete=models.CASCADE, related_name='watchers')
+    team_member = models.ForeignKey(TeamMember, on_delete=models.CASCADE, related_name='watching_tasks')
+    created_at  = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('task', 'team_member')
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"{self.team_member} watching {self.task}"
+
+
+class TaskTemplate(models.Model):
+    """Reusable task pattern, scoped per Company. Used to spawn ProjectTasks
+    pre-populated with the template's fields + subtask titles."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='task_templates')
+
+    name     = models.CharField(max_length=255, help_text='Template label, shown in the picker')
+    title    = models.CharField(max_length=255, help_text='Default ProjectTask.title')
+    details  = models.TextField(blank=True)
+    category = models.CharField(max_length=20, choices=ProjectTask.CATEGORY_CHOICES, default='other')
+    priority = models.CharField(max_length=10, choices=ProjectTask.PRIORITY_CHOICES, default='normal')
+    location = models.CharField(max_length=255, blank=True)
+
+    subtask_titles       = models.JSONField(default=list, blank=True, help_text='List[str] — one Subtask per title')
+    recurrence           = models.CharField(max_length=10, choices=ProjectTask.RECURRENCE_CHOICES, default='none')
+    reminder_days_before = models.IntegerField(default=0)
+
+    default_assignee      = models.ForeignKey(TeamMember, on_delete=models.SET_NULL,
+                                              null=True, blank=True, related_name='default_for_templates')
+    default_assignee_name = models.CharField(max_length=255, blank=True)
+    default_phase_name    = models.CharField(max_length=100, blank=True,
+                                             help_text='Phase name (resolved per-project at spawn time)')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+        unique_together = ('company', 'name')
+
+    def __str__(self):
+        return self.name
+
+
+class BudgetLineItem(models.Model):
+    """CSI-coded line item under a project's budget. Different from the legacy
+    Budget model's hardcoded labor/materials/etc. categories — those are kept
+    as a coarse summary; this is the granular line-by-line breakdown the Mac
+    app already maintains in BudgetStore (`ch_csi_line_items_v1`)."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='budget_line_items')
+
+    csi_code         = models.CharField(max_length=20, blank=True, help_text='e.g. "03 30 00"')
+    csi_title        = models.CharField(max_length=255, blank=True, help_text='CSI MasterFormat title')
+    description      = models.CharField(max_length=500, blank=True)
+    budgeted_amount  = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    sort_order       = models.IntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['project', 'sort_order', 'csi_code']
+        indexes = [models.Index(fields=['project', 'csi_code'])]
+
+    def __str__(self):
+        return f"{self.csi_code} {self.description}"[:80]
+
+
+class BudgetAllocation(models.Model):
+    """Allocates an Invoice (or part of one) to a BudgetLineItem.
+    Distinct from SubLineAllocation (A1) which allocates to subcontract lines.
+    This is for general budget categorization — what the Mac BudgetStore calls
+    InvoiceAllocation. A single invoice can split across multiple budget lines
+    via multiple allocations."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    invoice    = models.ForeignKey(Invoice,         on_delete=models.CASCADE, related_name='budget_allocations')
+    line_item  = models.ForeignKey(BudgetLineItem,  on_delete=models.CASCADE, related_name='allocations')
+
+    csi_code        = models.CharField(max_length=20, blank=True, help_text='Snapshot of line item CSI at allocation time')
+    amount          = models.DecimalField(max_digits=14, decimal_places=2)
+    allocation_date = models.DateField(default=_date.today)
+    qb_pushed       = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-allocation_date', '-created_at']
+        indexes = [
+            models.Index(fields=['invoice']),
+            models.Index(fields=['line_item']),
+        ]
+
+    def __str__(self):
+        return f"${self.amount} · inv {self.invoice_id} → {self.csi_code}"
+
+
+# ============================================================================
+# QB Integration v2 — see QB_INTEGRATION_v2_SPEC.md
+#
+# QBLink: maps a ContractorHub entity to its QuickBooks counterpart, regardless
+# of whether the customer uses QBO (REST) or QBWC (SOAP). One row per
+# (CH entity, QB entity) pair. Replaces the scattered qb_*_id columns on
+# Subcontract/Project/Invoice over time (those stay for backwards compat in v1).
+# ============================================================================
+
+
+class QBLink(models.Model):
+    """A single mapping between a ContractorHub entity and the QB record it
+    corresponds to. Used by QBService implementations to:
+    - Detect "already pushed" → do an update instead of a create (idempotency)
+    - Find the QB record when a follow-up event fires (e.g., when an Invoice
+      moves from approved → paid, look up the Bill we already created so we
+      can attach a BillPayment to it)
+    - Surface per-row sync state in the Mac UI."""
+
+    SYNC_STATE_CHOICES = [
+        ('synced',           'Synced'),
+        ('queued',           'Queued (waiting for QBWC poll or retry)'),
+        ('failed_permanent', 'Failed permanently'),
+    ]
+
+    # Polymorphic reference: store the CH entity type as a string + ID so we
+    # don't need to add a FK column for every entity that gets QB-linked.
+    # (Django GenericForeignKey is overkill here; we don't need reverse lookups.)
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='qb_links')
+
+    contractorhub_entity_type = models.CharField(max_length=50,
+        help_text='e.g. "Subcontract", "Project", "Invoice".')
+    contractorhub_entity_id   = models.CharField(max_length=64,
+        help_text='UUID or int as string — whatever the source entity uses.')
+
+    qb_entity_type = models.CharField(max_length=50,
+        help_text='e.g. "Vendor", "Customer", "Bill", "Invoice", "BillPayment".')
+    qb_entity_id   = models.CharField(max_length=64, blank=True,
+        help_text='Empty until first successful sync. Populated from QB response.')
+
+    qb_sync_token = models.CharField(max_length=20, blank=True,
+        help_text="QBO's optimistic-lock SyncToken; QBWC's EditSequence. Updated on every successful write.")
+
+    sync_state     = models.CharField(max_length=20, choices=SYNC_STATE_CHOICES, default='queued')
+    failure_reason = models.TextField(blank=True)
+    last_synced_at = models.DateTimeField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        # One CH entity can have MULTIPLE QB counterparts of different types.
+        # Example: an Invoice (vendor_bill kind) → both a "Bill" QBLink and
+        # a "BillPayment" QBLink. Original Phase 1 design only allowed one
+        # QB counterpart per CH entity, which broke the bill+payment flow.
+        # Fixed in 0010 by adding qb_entity_type to the uniqueness key.
+        unique_together = ('company', 'contractorhub_entity_type',
+                           'contractorhub_entity_id', 'qb_entity_type')
+        indexes = [
+            models.Index(fields=['company', 'sync_state']),
+            models.Index(fields=['company', 'qb_entity_type', 'qb_entity_id']),
+        ]
+
+    def __str__(self):
+        return f"{self.contractorhub_entity_type}/{self.contractorhub_entity_id} → {self.qb_entity_type}/{self.qb_entity_id} [{self.sync_state}]"
