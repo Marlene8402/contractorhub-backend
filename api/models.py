@@ -50,12 +50,8 @@ class Company(models.Model):
     state = models.CharField(max_length=50, blank=True)
     zip_code = models.CharField(max_length=10, blank=True)
 
-    # QB Integration (legacy; kept for backwards compat with the existing
-    # QBO OAuth code in qb_views.py until that's refactored to use QBOService).
-    qb_access_token = models.TextField(blank=True, null=True)
-    qb_refresh_token = models.TextField(blank=True, null=True)
-    qb_realm_id = models.CharField(max_length=100, blank=True)
-    qb_token_expires_at = models.DateTimeField(blank=True, null=True)
+    # QB connection-state flag exposed via Company serializer + read by the
+    # Mac app. Real OAuth tokens live on QBAccount (one per User), not here.
     qb_connected = models.BooleanField(default=False)
 
     # QB v2 fields (Session B). qb_mode picks the QBService implementation;
@@ -251,7 +247,7 @@ class QBAccount(models.Model):
     token_expires_at = models.DateTimeField()
     realm_id = models.CharField(max_length=20)
     is_connected = models.BooleanField(default=True)
-    connected_at = models.DateTimeField(auto_now_add=True)
+    connected_at = models.DateTimeField(default=timezone.now)
     last_refreshed_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):

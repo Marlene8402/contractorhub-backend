@@ -8,13 +8,14 @@ URLs in `api/urls.py` per qb_urls.py in this patch folder.
 from django.shortcuts import redirect
 from django.http import JsonResponse, HttpResponse
 from django.conf import settings
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.response import Response
 import requests
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from api.models import QBAccount, QBSyncLog, QBGLMapping, Invoice
 from api.qb_integration import sync_invoice_to_qb
@@ -72,14 +73,17 @@ def quickbooks_callback(request):
         return JsonResponse({'error': 'Token exchange failed', 'detail': r.text}, status=400)
 
     token_data = r.json()
+    now = timezone.now()
     QBAccount.objects.update_or_create(
         user=user,
         defaults={
             'access_token': token_data['access_token'],
             'refresh_token': token_data['refresh_token'],
-            'token_expires_at': datetime.now() + timedelta(hours=1),
+            'token_expires_at': now + timedelta(seconds=int(token_data.get('expires_in', 3600))),
             'realm_id': realm_id,
             'is_connected': True,
+            'connected_at': now,
+            'last_refreshed_at': now,
         },
     )
 
