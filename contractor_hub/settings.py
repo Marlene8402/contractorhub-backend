@@ -152,6 +152,13 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:8000",
 ]
 
+# Field-level encryption key for sensitive at-rest data (currently QB
+# OAuth tokens; will also cover the QBWC password when Desktop ships).
+# Generate via: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+# In DEBUG mode, api.fields.EncryptedTextField derives a key from SECRET_KEY
+# so local dev doesn't need this set.
+FIELD_ENCRYPTION_KEY = config('FIELD_ENCRYPTION_KEY', default='')
+
 # QB OAuth Settings
 QB_CLIENT_ID = config('QB_CLIENT_ID', default='')
 QB_CLIENT_SECRET = config('QB_CLIENT_SECRET', default='')

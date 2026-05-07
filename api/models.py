@@ -5,6 +5,8 @@ from django.db import models
 from django.contrib.auth.models import User
 from django.utils import timezone
 
+from .fields import EncryptedTextField
+
 class Company(models.Model):
     """Contractor company profile"""
 
@@ -240,10 +242,16 @@ class Invoice(models.Model):
 
 
 class QBAccount(models.Model):
-    """One QB OAuth connection per Django user."""
+    """One QB OAuth connection per Django user.
+
+    access_token / refresh_token are encrypted at rest via Fernet.
+    Reads/writes are transparent — application code sees plaintext.
+    The encryption key (FIELD_ENCRYPTION_KEY) is a Railway env var,
+    independent of SECRET_KEY so each can rotate separately.
+    """
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='qb_account')
-    access_token = models.TextField()
-    refresh_token = models.TextField()
+    access_token = EncryptedTextField()
+    refresh_token = EncryptedTextField()
     token_expires_at = models.DateTimeField()
     realm_id = models.CharField(max_length=20)
     is_connected = models.BooleanField(default=True)
