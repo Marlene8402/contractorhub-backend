@@ -171,10 +171,26 @@ class ThrottledObtainAuthToken(ObtainAuthToken):
         try:
             response = super().post(request, *args, **kwargs)
         except Exception:
+            # On failure, try to resolve the username to a real user so
+            # the audit row ties to that user's company. Account-takeover
+            # attempts then surface in the victim's audit log.
+            attempted_username = request.data.get('username', '')
+            target_user = None
+            target_company = None
+            if attempted_username:
+                target_user = User.objects.filter(
+                    username__iexact=attempted_username
+                ).first()
+                if target_user:
+                    target_company = Company.objects.filter(
+                        owner=target_user
+                    ).first()
             log_audit(
                 action='login_failed',
                 request=request,
-                metadata={'username': request.data.get('username', '')[:200]},
+                user=target_user,
+                company=target_company,
+                metadata={'username': attempted_username[:200]},
             )
             raise
         # Successful — pull the user back out of the validated serializer.
