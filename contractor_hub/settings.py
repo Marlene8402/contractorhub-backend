@@ -17,6 +17,24 @@ DEBUG = config('DEBUG', default=True, cast=bool)
 _allowed = config('ALLOWED_HOSTS', default='localhost,127.0.0.1')
 ALLOWED_HOSTS = [h.strip() for h in _allowed.split(',')]
 
+# Security headers — only applied in production (DEBUG=False) so local dev
+# can still talk to http://localhost without redirect loops or refused cookies.
+# Railway terminates TLS upstream and sets X-Forwarded-Proto, so we trust
+# that header for SECURE_SSL_REDIRECT to not redirect-loop.
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_SSL_REDIRECT = True
+    SECURE_HSTS_SECONDS = 31536000          # 1 year
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    # SECURE_HSTS_PRELOAD intentionally OFF — turn on only after submitting
+    # to the HSTS preload list at hstspreload.org and verifying everything
+    # works for at least a few weeks at 1-year HSTS.
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_REFERRER_POLICY = 'same-origin'
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    X_FRAME_OPTIONS = 'DENY'
+
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',

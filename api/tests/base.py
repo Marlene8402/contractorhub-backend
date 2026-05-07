@@ -9,6 +9,7 @@ from datetime import date, timedelta
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APITestCase
 from django.contrib.auth.models import User
+from django.utils import timezone
 
 from api.models import Company, TeamMember, Project, Subcontract, Invoice
 
@@ -30,7 +31,12 @@ class BaseAPITestCase(APITestCase):
             email=f"test_{suffix}@example.com",
             password="x",
         )
-        co = Company.objects.create(owner=u, name=f"Co {suffix}", email=u.email)
+        co = Company.objects.create(
+            owner=u, name=f"Co {suffix}", email=u.email,
+            # Active 30-day trial so HasActiveSubscription doesn't 402 the
+            # tests before they reach the actual code path under test.
+            trial_ends_at=timezone.now() + timedelta(days=30),
+        )
         tm = TeamMember.objects.create(
             company=co, user=u,
             first_name="Test", last_name=suffix,

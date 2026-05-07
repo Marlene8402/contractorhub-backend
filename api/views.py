@@ -1,5 +1,6 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from .models import (
@@ -203,7 +204,15 @@ def _user_company(user):
 class _CompanyScopedViewSet(viewsets.ModelViewSet):
     """Base for entities owned (transitively) by Company.
     Subclasses set `model` and `project_lookup` (the ORM path from the model
-    to a Project foreign key, e.g. 'project' or 'subcontract__project')."""
+    to a Project foreign key, e.g. 'project' or 'subcontract__project').
+
+    Security: get_queryset filters READS by company. perform_create /
+    perform_update validate WRITES by following the project_lookup chain
+    through validated_data and confirming the resolved Project belongs to
+    the requesting user's company. Without this check, a malicious caller
+    could plant rows on another tenant's project by passing its FK in the
+    POST body — DRF's auto-generated PrimaryKeyRelatedField doesn't scope
+    by default."""
     permission_classes = [IsAuthenticated, HasActiveSubscription]
     model = None
     project_lookup = 'project'
@@ -217,6 +226,55 @@ class _CompanyScopedViewSet(viewsets.ModelViewSet):
         if project_id:
             qs = qs.filter(**{self.project_lookup: project_id})
         return qs
+
+    def perform_create(self, serializer):
+        self._enforce_company_scope(serializer.validated_data)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._enforce_company_scope(serializer.validated_data)
+        serializer.save()
+
+    def _enforce_company_scope(self, validated_data):
+        """Walk project_lookup through validated_data, resolve the Project,
+        and 403 if it doesn't belong to the requesting user's company.
+        Handles 1- and 2-deep lookups: 'project', 'subcontract__project',
+        'task__project', 'invoice__project'."""
+        company = _user_company(self.request.user)
+        if not company:
+            raise PermissionDenied("No company associated with this user.")
+
+        parts = self.project_lookup.split('__')
+        # validated_data uses the first segment as the field name (it's a
+        # nested Model instance after DRF's PrimaryKeyRelatedField resolves).
+        obj = validated_data.get(parts[0])
+        if obj is None:
+            # Field absent (partial update) — get_queryset already restricted
+            # the row to this user's company, so updating without changing
+            # the FK is safe.
+            return
+
+        # Walk any intermediate FKs (only relevant for 3+-deep lookups; today
+        # the deepest is 2 segments like 'subcontract__project').
+        for part in parts[1:-1]:
+            obj = getattr(obj, part, None)
+            if obj is None:
+                return
+
+        # Final segment: if the lookup ended at 'project', `obj` IS the
+        # Project. Otherwise (e.g. 1-deep 'project'), `obj` is the Project
+        # itself. For 2-deep ending in 'project', dereference once more.
+        if parts[0] == 'project':
+            project = obj
+        else:
+            project = getattr(obj, 'project', None)
+        if project is None:
+            return
+
+        if project.company_id != company.id:
+            raise PermissionDenied(
+                "FK references an entity in a different company."
+            )
 
 
 class VendorViewSet(viewsets.ModelViewSet):
