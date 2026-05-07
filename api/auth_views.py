@@ -18,9 +18,14 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework import serializers, status
 from rest_framework.authtoken.models import Token
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.authtoken.views import ObtainAuthToken
+from rest_framework.decorators import (
+    api_view, permission_classes, throttle_classes,
+)
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+
+from .throttles import LoginAnonThrottle, RegisterAnonThrottle
 
 from .models import Company, TeamMember
 from .serializers import CompanySerializer
@@ -68,6 +73,7 @@ def _create_stripe_customer(company, user):
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([RegisterAnonThrottle])
 def register(request):
     serializer = RegisterSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
@@ -133,6 +139,12 @@ def register(request):
         },
         status=status.HTTP_201_CREATED,
     )
+
+class ThrottledObtainAuthToken(ObtainAuthToken):
+    """Login endpoint with anonymous per-IP rate limiting. Mounted at
+    /api/auth/token/ in api/urls.py in place of the unthrottled
+    obtain_auth_token. Defends against credential-stuffing botnets."""
+    throttle_classes = [LoginAnonThrottle]
 
 
 @api_view(['GET'])

@@ -1,6 +1,5 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from rest_framework.authtoken.views import obtain_auth_token
 from . import views, qb_views, auth_views, billing_views, webhook_views
 
 router = DefaultRouter()
@@ -42,8 +41,9 @@ router.register(r'budget-allocations', views.BudgetAllocationViewSet, basename='
 urlpatterns = [
     path('', include(router.urls)),
 
-    # Auth: token issue (login), registration, identity
-    path('auth/token/',    obtain_auth_token,   name='api-token-auth'),
+    # Auth: token issue (login), registration, identity. Both auth/token/
+    # and auth/register/ are rate-limited per IP via ScopedRateThrottle.
+    path('auth/token/',    auth_views.ThrottledObtainAuthToken.as_view(), name='api-token-auth'),
     path('auth/register/', auth_views.register, name='auth_register'),
     path('auth/me/',       auth_views.me,       name='auth_me'),
 

@@ -142,6 +142,15 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 100,
+    # Per-IP rate limits for unauthenticated auth endpoints. ScopedRateThrottle
+    # picks the rate from the scope name set on each view (auth_login,
+    # auth_register). Tighter on register since it's a heavier write path
+    # with a Stripe round-trip; login is interactive and forgivable.
+    'DEFAULT_THROTTLE_CLASSES': [],  # opt-in per view, not global
+    'DEFAULT_THROTTLE_RATES': {
+        'auth_login':    '10/min',
+        'auth_register': '5/min',
+    },
 }
 
 # CORS
