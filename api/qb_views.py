@@ -17,6 +17,7 @@ from rest_framework.response import Response
 import requests
 from datetime import timedelta
 
+from api.audit import log_audit
 from api.models import QBAccount, QBSyncLog, QBGLMapping, Invoice
 from api.qb_integration import sync_invoice_to_qb
 
@@ -98,6 +99,13 @@ def quickbooks_callback(request):
         # manually flip qb_mode via Django admin.
         pass
 
+    log_audit(
+        action='qb_connect',
+        request=request,
+        user=user,
+        metadata={'realm_id': realm_id},
+    )
+
     return HttpResponse(
         "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
         "<h2>✅ Connected to QuickBooks</h2>"
@@ -169,6 +177,7 @@ def qb_sync_status(request):
 def quickbooks_disconnect(request):
     """Mark the connection as disconnected. Doesn't revoke the token at Intuit."""
     QBAccount.objects.filter(user=request.user).update(is_connected=False)
+    log_audit(action='qb_disconnect', request=request, user=request.user)
     return Response({'status': 'disconnected'})
 
 

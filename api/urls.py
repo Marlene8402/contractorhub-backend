@@ -38,6 +38,9 @@ router.register(r'task-templates',     views.TaskTemplateViewSet,     basename='
 router.register(r'budget-line-items',  views.BudgetLineItemViewSet,   basename='budget-line-item')
 router.register(r'budget-allocations', views.BudgetAllocationViewSet, basename='budget-allocation')
 
+# Audit log — read-only
+router.register(r'audit', views.AuditLogViewSet, basename='audit-log')
+
 urlpatterns = [
     path('', include(router.urls)),
 

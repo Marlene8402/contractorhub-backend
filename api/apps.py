@@ -10,3 +10,6 @@ class ApiConfig(AppConfig):
         # for Subcontract and Project so they auto-push to QB on save.
         # See api/qb_signals.py.
         from . import qb_signals  # noqa: F401
+        # Audit log signal handlers for legal-document models
+        # (LienWaiver, PaymentApplication, ChangeOrders).
+        from . import audit  # noqa: F401

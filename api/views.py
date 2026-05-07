@@ -687,3 +687,37 @@ class BudgetAllocationViewSet(_CompanyScopedViewSet):
         if line_id:
             qs = qs.filter(line_item_id=line_id)
         return qs
+
+
+# =============================================================================
+# Audit log — read-only API
+# =============================================================================
+
+from .models import AuditLog
+from .serializers import AuditLogSerializer
+
+
+class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only access to the caller's company's audit log.
+
+    GET /api/audit/                            list (paginated)
+    GET /api/audit/?entity_type=LienWaiver     filter by model
+    GET /api/audit/?entity_id=<uuid>           filter by specific record
+    GET /api/audit/?action=login_failed        filter by action
+
+    Rows are immutable — there's no POST/PUT/DELETE here. Backend
+    creates entries via api.audit.log_audit() and signal handlers.
+    """
+    serializer_class = AuditLogSerializer
+    permission_classes = [IsAuthenticated, HasActiveSubscription]
+
+    def get_queryset(self):
+        company = _user_company(self.request.user)
+        if not company:
+            return AuditLog.objects.none()
+        qs = AuditLog.objects.filter(company=company)
+        for param in ('entity_type', 'entity_id', 'action'):
+            val = self.request.query_params.get(param)
+            if val:
+                qs = qs.filter(**{param: val})
+        return qs

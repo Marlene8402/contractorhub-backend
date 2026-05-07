@@ -458,3 +458,27 @@ class BudgetAllocationSerializer(serializers.ModelSerializer):
             'amount', 'allocation_date', 'qb_pushed', 'created_at',
         ]
         read_only_fields = ['created_at']
+
+
+# ---------- Audit log ----------
+
+from .models import AuditLog
+
+
+class AuditLogSerializer(serializers.ModelSerializer):
+    """Read-only — audit rows are write-once. The Mac app + future web
+    app render this in an Activity panel for compliance review."""
+    user_email = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AuditLog
+        fields = [
+            'id', 'action', 'entity_type', 'entity_id',
+            'user', 'user_email',
+            'before', 'after', 'metadata',
+            'ip', 'user_agent', 'created_at',
+        ]
+        read_only_fields = fields  # entire row is immutable through API
+
+    def get_user_email(self, obj):
+        return obj.user.email if obj.user else ''

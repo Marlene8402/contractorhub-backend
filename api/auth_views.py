@@ -25,10 +25,10 @@ from rest_framework.decorators import (
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from .throttles import LoginAnonThrottle, RegisterAnonThrottle
-
+from .audit import log_audit
 from .models import Company, TeamMember
 from .serializers import CompanySerializer
+from .throttles import LoginAnonThrottle, RegisterAnonThrottle
 
 
 class RegisterSerializer(serializers.Serializer):
@@ -137,6 +137,14 @@ def register(request):
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
+    log_audit(
+        action='signup',
+        request=request,
+        user=user,
+        company=company,
+        metadata={'email': data['email']},
+    )
+
     return Response(
         {
             'token': token.key,
@@ -154,8 +162,28 @@ def register(request):
 class ThrottledObtainAuthToken(ObtainAuthToken):
     """Login endpoint with anonymous per-IP rate limiting. Mounted at
     /api/auth/token/ in api/urls.py in place of the unthrottled
-    obtain_auth_token. Defends against credential-stuffing botnets."""
+    obtain_auth_token. Defends against credential-stuffing botnets.
+    Also writes an AuditLog row on every login attempt (success or
+    failure) so abnormal access patterns are visible after the fact."""
     throttle_classes = [LoginAnonThrottle]
+
+    def post(self, request, *args, **kwargs):
+        try:
+            response = super().post(request, *args, **kwargs)
+        except Exception:
+            log_audit(
+                action='login_failed',
+                request=request,
+                metadata={'username': request.data.get('username', '')[:200]},
+            )
+            raise
+        # Successful — pull the user back out of the validated serializer.
+        serializer = self.serializer_class(data=request.data,
+                                            context={'request': request})
+        if serializer.is_valid():
+            user = serializer.validated_data.get('user')
+            log_audit(action='login', request=request, user=user)
+        return response
 
 
 @api_view(['GET'])

@@ -1302,3 +1302,84 @@ class QBLink(models.Model):
 
     def __str__(self):
         return f"{self.contractorhub_entity_type}/{self.contractorhub_entity_id} → {self.qb_entity_type}/{self.qb_entity_id} [{self.sync_state}]"
+
+
+# =============================================================================
+# Audit log
+# =============================================================================
+
+class AuditLog(models.Model):
+    """Immutable record of sensitive actions across the platform. Backs
+    ContractorHub's legal-defensibility positioning on lien waivers,
+    pay apps, and change orders ('who edited this and when'). Also
+    serves as a security audit trail for login / signup / QB OAuth /
+    subscription events.
+
+    Two write paths feed this table:
+
+    1. View-level events — register, login, QB connect/disconnect, etc.
+       Captured via api.audit.log_audit() called explicitly from the
+       relevant view. IP and user_agent are set from the request.
+
+    2. Model-level events — LienWaiver / PaymentApplication / ChangeOrder
+       create/update/delete. Captured via post_save and post_delete
+       Django signals. IP and user_agent stay blank because signals
+       fire outside request context.
+
+    Rows are write-once; there's no API or admin path to delete or
+    update them after creation.
+    """
+    ACTION_CHOICES = [
+        ('create',                'Created'),
+        ('update',                'Updated'),
+        ('delete',                'Deleted'),
+        ('status_change',         'Status changed'),
+        ('login',                 'Logged in'),
+        ('login_failed',          'Login failed'),
+        ('signup',                'Signed up'),
+        ('qb_connect',            'Connected QuickBooks'),
+        ('qb_disconnect',         'Disconnected QuickBooks'),
+        ('subscription_start',    'Subscription started'),
+        ('subscription_cancel',   'Subscription canceled'),
+        ('payment_failed',        'Payment failed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    company = models.ForeignKey(
+        Company, on_delete=models.CASCADE, related_name='audit_logs',
+        null=True, blank=True,
+        help_text='Null for events with no company yet (e.g. failed login attempt for an email that does not exist).',
+    )
+    user = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='audit_logs_as_actor',
+        help_text='The actor — who did this. Null for anonymous events.',
+    )
+    action = models.CharField(max_length=30, choices=ACTION_CHOICES)
+    entity_type = models.CharField(max_length=50, blank=True,
+                                    help_text='e.g. "LienWaiver", "PaymentApplication". Blank for non-entity events like login.')
+    entity_id = models.CharField(max_length=100, blank=True,
+                                  help_text='UUID or int as string.')
+    before = models.JSONField(blank=True, null=True,
+                               help_text='Snapshot of relevant fields before the action (for update/status_change).')
+    after = models.JSONField(blank=True, null=True,
+                              help_text='Snapshot of relevant fields after the action.')
+    ip = models.GenericIPAddressField(blank=True, null=True,
+                                       help_text='Captured for view-level events only.')
+    user_agent = models.TextField(blank=True)
+    metadata = models.JSONField(blank=True, default=dict,
+                                 help_text='Free-form per-action data (e.g. failed login email, Stripe event ID).')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['company', '-created_at']),
+            models.Index(fields=['entity_type', 'entity_id']),
+            models.Index(fields=['user', '-created_at']),
+        ]
+
+    def __str__(self):
+        who = self.user.username if self.user else 'anon'
+        what = f"{self.entity_type}/{self.entity_id}" if self.entity_type else self.action
+        return f"[{self.created_at:%Y-%m-%d %H:%M}] {who} {self.action} {what}"
