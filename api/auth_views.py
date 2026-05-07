@@ -113,13 +113,24 @@ def register(request):
             company.stripe_customer_id = _create_stripe_customer(company, user)
             company.save(update_fields=['stripe_customer_id'])
             token, _ = Token.objects.get_or_create(user=user)
-    except IntegrityError:
-        # Race: two parallel signups for the same email. The unique constraint
-        # on User.username catches it; surface a clean 400.
-        return Response(
-            {'email': ['An account with this email already exists.']},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+    except IntegrityError as exc:
+        # We only want to reframe the *username uniqueness* race here:
+        # serializer.validate_email already rejects duplicates, but two
+        # signups for the same email between that check and create_user
+        # can both reach this point. Any OTHER IntegrityError (NOT NULL
+        # without default, FK violation, etc.) is a real bug — let it
+        # bubble to the default 500 handler so we see it in logs and
+        # don't mislead users with a "duplicate email" message that
+        # masks the real issue (this exact misdiagnosis happened on
+        # 2026-05-01 when QB v2 NOT NULL columns lacked defaults and
+        # every signup got reframed as "already exists").
+        msg = str(exc).lower()
+        if 'auth_user_username' in msg or 'username' in msg:
+            return Response(
+                {'email': ['An account with this email already exists.']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        raise
     except stripe.error.StripeError as e:
         return Response(
             {'detail': f'Billing setup failed: {e.user_message or str(e)}'},
