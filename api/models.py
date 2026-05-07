@@ -637,6 +637,28 @@ class LienWaiver(models.Model):
 
     notes = models.TextField(blank=True)
 
+    # State-of-jurisdiction the waiver is governed by. Drives PDF generator
+    # selection — different states have different statutory forms (FL has
+    # 2, CA has 4, etc.). Empty = use a generic template.
+    STATE_CHOICES = [
+        ('FL', 'Florida'),
+        ('CA', 'California'),
+        ('TX', 'Texas'),
+        ('NY', 'New York'),
+        ('',   'Generic (no state-specific form)'),
+    ]
+    state = models.CharField(max_length=2, choices=STATE_CHOICES, blank=True, default='',
+                              help_text='Drives which statutory PDF template renders. FL = §713.20.')
+
+    # Florida §713.20(7) "conditional on check" rider. When true, the
+    # generated PDF includes language voiding the waiver if the
+    # specified check fails to clear. Optional — UI checkbox.
+    conditional_on_check = models.BooleanField(default=False)
+    check_number = models.CharField(max_length=50, blank=True)
+    check_amount = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    check_date = models.DateField(null=True, blank=True)
+    check_bank = models.CharField(max_length=255, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

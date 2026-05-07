@@ -212,10 +212,12 @@ class LienWaiverSerializer(serializers.ModelSerializer):
         model = LienWaiver
         fields = [
             'id', 'project', 'subcontract',
-            'waiver_type', 'status',
+            'waiver_type', 'status', 'state',
             'claimant_name', 'customer_name', 'owner_name',
             'job_address', 'job_description',
             'through_date', 'amount',
+            'conditional_on_check',
+            'check_number', 'check_amount', 'check_date', 'check_bank',
             'signed_by', 'signed_date', 'notary_name',
             'pdf_filename', 'notes',
             'created_at', 'updated_at',

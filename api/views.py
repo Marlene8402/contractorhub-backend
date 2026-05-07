@@ -439,6 +439,35 @@ class LienWaiverViewSet(_CompanyScopedViewSet):
             qs = qs.filter(status=status_filter)
         return qs
 
+    @action(detail=True, methods=['get'], url_path='pdf')
+    def pdf(self, request, pk=None):
+        """GET /api/lien-waivers/{id}/pdf/ — stream the statutorily-correct
+        PDF for this waiver. State-specific (currently FL only); raises
+        400 for waivers in unsupported states. Audit-logs the download."""
+        from .lien_waiver_pdf import render_pdf, LienWaiverRenderError
+        from .audit import log_audit
+        from django.http import HttpResponse, JsonResponse
+
+        lw = self.get_object()  # respects company scoping
+        try:
+            pdf_buf = render_pdf(lw)
+        except LienWaiverRenderError as e:
+            return JsonResponse({'error': str(e)}, status=400)
+
+        log_audit(
+            action='update',
+            request=request,
+            entity_type='LienWaiver',
+            entity_id=str(lw.id),
+            metadata={'pdf_downloaded': True, 'state': lw.state},
+        )
+        resp = HttpResponse(pdf_buf.getvalue(), content_type='application/pdf')
+        suffix = lw.through_date.strftime('%Y%m%d') if lw.through_date else 'undated'
+        resp['Content-Disposition'] = (
+            f'attachment; filename="lien_waiver_{lw.state or "GEN"}_{suffix}.pdf"'
+        )
+        return resp
+
 
 
 
