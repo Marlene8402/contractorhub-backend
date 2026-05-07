@@ -18,12 +18,19 @@ _allowed = config('ALLOWED_HOSTS', default='localhost,127.0.0.1')
 ALLOWED_HOSTS = [h.strip() for h in _allowed.split(',')]
 
 # Security headers — only applied in production (DEBUG=False) so local dev
-# can still talk to http://localhost without redirect loops or refused cookies.
-# Railway terminates TLS upstream and sets X-Forwarded-Proto, so we trust
-# that header for SECURE_SSL_REDIRECT to not redirect-loop.
+# can still talk to http://localhost without refused cookies.
+#
+# SECURE_SSL_REDIRECT is intentionally OFF. Railway's edge proxy already
+# 301s HTTP→HTTPS before requests reach this container; enabling Django's
+# redirect on top breaks Railway's internal healthchecks (they hit the
+# container over HTTP without X-Forwarded-Proto, get redirected, and mark
+# the deploy as unhealthy).
+#
+# SECURE_PROXY_SSL_HEADER tells Django to trust X-Forwarded-Proto from
+# Railway's edge, so request.is_secure() returns True for real client
+# traffic — which is what unlocks HSTS being set on responses.
 if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-    SECURE_SSL_REDIRECT = True
     SECURE_HSTS_SECONDS = 31536000          # 1 year
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     # SECURE_HSTS_PRELOAD intentionally OFF — turn on only after submitting
