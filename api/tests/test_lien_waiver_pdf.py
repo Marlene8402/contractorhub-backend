@@ -188,6 +188,118 @@ class FLFinalFormTests(APITestCase):
         self.assertIn('in consideration of the final payment', text)
 
 
+class CAFormTests(APITestCase):
+    """California §§8132 / 8134 / 8136 / 8138 — four mandatory forms.
+    Tests each one renders verbatim statutory phrasing per the form."""
+
+    def _waiver(self, **overrides):
+        from api.models import Company, Project, Subcontract
+        from django.contrib.auth.models import User
+        from django.utils import timezone
+        from datetime import timedelta
+
+        # Pick a unique username per test using overrides as a key seed,
+        # since this class generates 4 tenants (one per form variant).
+        seed = overrides.get('waiver_type', 'cond_partial')
+        u = User.objects.create_user(username=f'ca_{seed}', password='x')
+        co = Company.objects.create(
+            owner=u, name='CA Test Co', email='ca@x.com',
+            trial_ends_at=timezone.now() + timedelta(days=30),
+        )
+        proj = Project.objects.create(
+            company=co, name='SF High-Rise',
+            client_name='Bay Area Properties',
+            contract_amount='1000000.00',
+            start_date=date(2026, 1, 1), end_date=date(2026, 12, 31),
+            contract_number=f'CA-{seed}',
+        )
+        sub = Subcontract.objects.create(
+            project=proj, name='Drywall',
+            vendor_name='West Coast Drywall', scope='Drywall',
+            status='active',
+        )
+        defaults = {
+            'project': proj, 'subcontract': sub,
+            'state': 'CA',
+            'waiver_type': 'cond_partial',
+            'claimant_name': 'West Coast Drywall, Inc.',
+            'customer_name': 'GC General Contractors',
+            'owner_name': 'Bay Area Properties LLC',
+            'job_address': '500 Mission St, San Francisco, CA 94105',
+            'through_date': date(2026, 5, 5),
+            'amount': Decimal('25000.00'),
+            'check_number': '4711',
+            'check_amount': Decimal('25000.00'),
+            'check_date': date(2026, 5, 5),
+            'check_bank': 'Bank of the West',
+        }
+        defaults.update(overrides)
+        return LienWaiver.objects.create(**defaults)
+
+    # §8132 — Conditional Progress
+    def test_8132_title_and_notice(self):
+        from api.lien_waiver_pdf import render_pdf
+        text = _pdf_text(render_pdf(self._waiver(waiver_type='cond_partial')).getvalue())
+        self.assertIn('CONDITIONAL WAIVER AND RELEASE ON PROGRESS PAYMENT', text)
+        self.assertIn('EFFECTIVE ON RECEIPT OF PAYMENT', text)
+        self.assertIn('SHOULD NOT RELY', text)
+
+    def test_8132_includes_through_date_and_check_block(self):
+        from api.lien_waiver_pdf import render_pdf
+        text = _pdf_text(render_pdf(self._waiver(waiver_type='cond_partial')).getvalue())
+        self.assertIn('Through Date', text)
+        self.assertIn('Maker of Check', text)
+        self.assertIn('Bank of the West', text)
+        # Must include all four §8132 exception items
+        self.assertIn('Retentions', text)
+        self.assertIn('Extras', text)
+        self.assertIn('previously given a conditional waiver', text)
+        self.assertIn('rescission', text)
+
+    # §8134 — Unconditional Progress
+    def test_8134_title_and_warning_notice(self):
+        from api.lien_waiver_pdf import render_pdf
+        text = _pdf_text(render_pdf(self._waiver(waiver_type='uncond_partial')).getvalue())
+        self.assertIn('UNCONDITIONAL WAIVER AND RELEASE ON PROGRESS PAYMENT', text)
+        self.assertIn('NOTICE TO CLAIMANT', text)
+        self.assertIn('ENFORCEABLE AGAINST YOU IF YOU SIGN IT', text)
+        self.assertIn('USE A CONDITIONAL WAIVER AND RELEASE FORM', text)
+
+    def test_8134_states_payment_received(self):
+        from api.lien_waiver_pdf import render_pdf
+        text = _pdf_text(render_pdf(self._waiver(waiver_type='uncond_partial')).getvalue())
+        self.assertIn('claimant has received the following progress payment', text)
+        self.assertIn('$25,000.00', text)
+        # No check block on unconditional forms
+        self.assertNotIn('Maker of Check', text)
+        # 3 exceptions on §8134, NOT 4 (no "previously conditional" item)
+        self.assertNotIn('previously given a conditional waiver', text)
+
+    # §8136 — Conditional Final
+    def test_8136_title_no_through_date(self):
+        from api.lien_waiver_pdf import render_pdf
+        text = _pdf_text(render_pdf(self._waiver(waiver_type='cond_final')).getvalue())
+        self.assertIn('CONDITIONAL WAIVER AND RELEASE ON FINAL PAYMENT', text)
+        # Final forms omit Through Date in identifying info
+        self.assertNotIn('Through Date', text)
+
+    def test_8136_change_order_clause_and_disputed_extras(self):
+        from api.lien_waiver_pdf import render_pdf
+        text = _pdf_text(render_pdf(self._waiver(waiver_type='cond_final')).getvalue())
+        # The change-order language is unique to final forms
+        self.assertIn('written change order', text)
+        # Final forms have a single exception, not a 4-item list
+        self.assertIn('Disputed claims for extras', text)
+
+    # §8138 — Unconditional Final
+    def test_8138_title_and_paid_in_full(self):
+        from api.lien_waiver_pdf import render_pdf
+        text = _pdf_text(render_pdf(self._waiver(waiver_type='uncond_final')).getvalue())
+        self.assertIn('UNCONDITIONAL WAIVER AND RELEASE ON FINAL PAYMENT', text)
+        self.assertIn('claimant has been paid in full', text)
+        self.assertIn('NOTICE TO CLAIMANT', text)
+
+
 class LienWaiverPdfEndpointTests(BaseAPITestCase):
     """The /api/lien-waivers/{id}/pdf/ download endpoint."""
 
@@ -221,7 +333,7 @@ class LienWaiverPdfEndpointTests(BaseAPITestCase):
 
     def test_pdf_endpoint_400_for_unsupported_state(self):
         lw = self._make_fl_waiver(self.proj1, self.sub1)
-        lw.state = 'CA'  # not supported yet
+        lw.state = 'TX'  # not supported yet (FL + CA are; TX/NY pending)
         lw.save(update_fields=['state'])
         self.auth1()
         r = self.client.get(f'/api/lien-waivers/{lw.id}/pdf/')
