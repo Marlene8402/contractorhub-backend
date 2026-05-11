@@ -3,9 +3,27 @@ builder = "nixpacks"
 buildCommand = "pip install -r requirements.txt && python manage.py collectstatic --no-input"
 
 [deploy]
-startCommand = "gunicorn contractor_hub.wsgi --bind 0.0.0.0:$PORT"
+# Migrate as part of every container start so the prod DB schema is
+# always at the same revision as the deployed code. The `[[deploy.releaseCommands]]`
+# block below was meant to do this but Railway has a known pipeline
+# bug where it silently skips release commands when reusing a cached
+# build (confirmed empirically — yesterday's CA-renderer deploy logs
+# show only the gunicorn boot, no migration step, leaving prod's DB
+# a day behind the code).
+#
+# Baking it into startCommand is more reliable: migrate runs every
+# boot, is idempotent when no new migrations are pending, and uses
+# Django's advisory lock so parallel workers can't race. If migrate
+# fails, gunicorn never starts and the healthcheck fails — which is
+# the behavior we want (better to surface a schema mismatch than
+# silently serve 500s).
+startCommand = "python manage.py migrate --no-input && gunicorn contractor_hub.wsgi --bind 0.0.0.0:$PORT"
 healthcheckPath = "/health/"
-healthcheckTimeout = 30
+healthcheckTimeout = 60
 
+# Belt-and-suspenders: if Railway ever honors this, migrations run
+# twice on release (still idempotent). Removing would mean relying
+# entirely on startCommand, which is fine, but keeping it documents
+# intent and gives Railway a chance to do the right thing.
 [[deploy.releaseCommands]]
 command = "python manage.py migrate --no-input"
